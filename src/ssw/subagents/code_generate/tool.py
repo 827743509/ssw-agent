@@ -1,120 +1,154 @@
-import asyncio
-import os
+from __future__ import annotations
 
+import asyncio
 import subprocess
 import sys
-from claude_agent_sdk import ClaudeAgentOptions, query, AssistantMessage, TextBlock, ToolUseBlock
-from langgraph.types import interrupt
+from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import Any, TypeVar
+
+from claude_agent_sdk import (
+    AssistantMessage,
+    ClaudeAgentOptions,
+    TextBlock,
+    ToolUseBlock,
+    query,
+)
+from langgraph.types import interrupt
+
 from ssw.config import get_settings
 from ssw.subagents.code_generate.model import CodeGenerateInput
-from typing import Any
 
-settings=get_settings()
 
-if sys.platform == "win32":
-    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+settings = get_settings()
+T = TypeVar("T")
+
+
+class GitCommandError(RuntimeError):
+    pass
+
 
 def print_claude_stderr(line: str) -> None:
-    print("[claude stderr]", line, end="", file=sys.stderr)
-async def create_workspace(state:CodeGenerateInput):
-    base_dir = Path(settings.ssw_workspace)
-    code_workspace = base_dir / state.project_name
-    if not code_workspace.exists():
-       await asyncio.to_thread(
-            Path(code_workspace).mkdir,
-            parents=True,
-            exist_ok=True,
-        )
-
-       def _run():
-           return subprocess.run(["git", "clone", state.url,str(code_workspace)],check=True)
-       await asyncio.to_thread(_run)
-       subprocess.run(
-        ["git", "checkout", state.branch],
-        cwd=str(code_workspace),
-        check=True
-     )
-    return {"project_workspace":str(code_workspace)}
+    print(f"[claude stderr] {line}", file=sys.stderr)
 
 
+def _claude_cli_path() -> Path | None:
+    if not settings.claude_cli_path:
+        return None
+
+    cli_path = settings.claude_cli_path.strip()
+    if not cli_path:
+        return None
+
+    return Path(cli_path).expanduser()
 
 
-def select_coding_ide(code_generate_input:CodeGenerateInput):
-    return code_generate_input.code_edit
-CLAUDE_CLI_PATH = Path(r"C:\Users\82774\AppData\Roaming\npm\claude.cmd")
-PROJECT_DIR = Path(r"D:\project\ssw-agent\workspace\ssw-blog")
-async def collect_claude_plan(question: str, project_workspace: str) -> str:
-    options = ClaudeAgentOptions(
-        cli_path=CLAUDE_CLI_PATH,
-        cwd=PROJECT_DIR,
-        permission_mode="plan"
+def _project_workspace(project_workspace: str | None) -> Path:
+    if not project_workspace:
+        raise RuntimeError("project_workspace is required before running Claude Code")
+
+    return Path(project_workspace).resolve()
+
+
+def _claude_options(project_workspace: str, permission_mode: str) -> ClaudeAgentOptions:
+    return ClaudeAgentOptions(
+        cli_path=_claude_cli_path(),
+        cwd=_project_workspace(project_workspace),
+        permission_mode=permission_mode,
+        stderr=print_claude_stderr,
     )
+
+
+def _run_coroutine_in_isolated_loop(
+    coroutine_factory: Callable[[], Awaitable[T]],
+) -> T:
+    if sys.platform == "win32":
+        loop = asyncio.ProactorEventLoop()
+    else:
+        loop = asyncio.new_event_loop()
+
+    try:
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(coroutine_factory())
+    finally:
+        asyncio.set_event_loop(None)
+        loop.close()
+
+
+async def _run_in_isolated_loop(
+    coroutine_factory: Callable[[], Awaitable[T]],
+) -> T:
+    return await asyncio.to_thread(_run_coroutine_in_isolated_loop, coroutine_factory)
+
+
+async def create_workspace(state: CodeGenerateInput) -> dict[str, str]:
+    base_dir = Path(settings.ssw_workspace or "workspace").resolve()
+    code_workspace = base_dir / state.project_name
+
+    if not code_workspace.exists():
+        await asyncio.to_thread(base_dir.mkdir, parents=True, exist_ok=True)
+        await run_cmd(["git", "clone", state.url, str(code_workspace)], str(base_dir))
+        await run_cmd(["git", "checkout", state.branch], str(code_workspace))
+
+    return {"project_workspace": str(code_workspace)}
+
+
+def select_coding_ide(code_generate_input: CodeGenerateInput) -> str:
+    return code_generate_input.code_edit
+
+
+async def collect_claude_plan(question: str, project_workspace: str) -> str:
+    options = _claude_options(project_workspace, "plan")
 
     text_parts: list[str] = []
     exit_plan: str | None = None
 
-    async for message in query(
-        prompt="把首页标题的new article改为最新文章",
-        options=options,
-    ):
+    async for message in query(prompt=question, options=options):
         if isinstance(message, AssistantMessage):
             for block in message.content:
                 if isinstance(block, ToolUseBlock) and block.name == "ExitPlanMode":
                     plan = block.input.get("plan")
                     if isinstance(plan, str) and plan.strip():
                         exit_plan = plan.strip()
+                elif isinstance(block, TextBlock) and block.text.strip():
+                    text_parts.append(block.text.strip())
 
-                elif isinstance(block, TextBlock):
-                    if block.text.strip():
-                        text_parts.append(block.text.strip())
-
-    # 优先用 ExitPlanMode 的 plan；没有的话再 fallback 到文本块
     plan = exit_plan or "\n\n".join(text_parts).strip()
-
     if not plan:
-        raise RuntimeError("Claude Code 没有返回可用的 plan")
+        raise RuntimeError("Claude Code did not return a usable plan")
 
     return plan
 
 
-async def gener_code_plan_by_claude_code(state:CodeGenerateInput) -> dict[str, Any]:
-
-
+async def gener_code_plan_by_claude_code(
+    state: CodeGenerateInput,
+) -> dict[str, Any]:
     question = state.question
 
-    # 用户要求修改计划时，把反馈拼回去让 Claude 重新生成
     review = state.review or {}
     if review.get("action") == "revise" and review.get("feedback"):
         question = (
             f"{question}\n\n"
             f"用户对上一版计划的修改意见：\n{review['feedback']}\n\n"
-            "请根据这个反馈重新生成计划。"
+            "请根据这个反馈重新生成实现计划。"
         )
-    plan=await collect_claude_plan(state.question, state.project_workspace)
-    # plan = await asyncio.to_thread(
-    #     _run_collect_in_new_loop,
-    #     state.question,
-    #     state.project_workspace,
-    # )
 
-    # 这里只返回 state，不 interrupt
+    plan = await _run_in_isolated_loop(
+        lambda: collect_claude_plan(question, state.project_workspace)
+    )
+
     return {
         "plan": plan,
-        "review": {},  # 清掉上一轮 review
+        "review": {},
     }
 
 
-
-
-
 def review_plan_node(state: CodeGenerateInput) -> dict[str, Any]:
-    # 这里才 interrupt，把 plan 返回给调用方/前端/用户
     review = interrupt(
         {
             "type": "code_plan_review",
             "plan": state.plan,
-            "message": "请确认是否执行这个计划",
+            "message": "请确认是否执行这个计划。",
             "actions": ["approve", "reject", "revise"],
         }
     )
@@ -135,34 +169,31 @@ def route_after_review(state: CodeGenerateInput) -> str:
     return "reject"
 
 
-
-
-async def execute_claude_code_plan(state: CodeGenerateInput) -> dict[str, Any]:
-    # 审批通过后再执行。这里按你的安全策略设置 permission_mode。
-    options = ClaudeAgentOptions(
-        cli_path=Path(r"C:\Users\82774\AppData\Roaming\npm\claude.cmd"),
-        cwd=Path(r"D:\project\ssw-agent\workspace\ssw-blog"),
-        permission_mode="acceptEdits"
-    )
-
+async def _execute_claude_code_plan(plan: str, project_workspace: str) -> str:
+    options = _claude_options(project_workspace, "acceptEdits")
     prompt = f"""
 用户已经批准下面的实现计划，请按计划修改项目代码。
 
 计划：
-{state.plan}
+{plan}
 """.strip()
 
     outputs: list[str] = []
-
-    async for message in query(prompt="把首页标题的new article改为最新文章", options=options):
+    async for message in query(prompt=prompt, options=options):
         if isinstance(message, AssistantMessage):
             for block in message.content:
-                if isinstance(block, TextBlock):
-                    outputs.append(block.text)
+                if isinstance(block, TextBlock) and block.text.strip():
+                    outputs.append(block.text.strip())
 
-    return {"result": "\n".join(outputs).strip()}
+    return "\n".join(outputs).strip()
 
 
+async def execute_claude_code_plan(state: CodeGenerateInput) -> dict[str, Any]:
+    result = await _run_in_isolated_loop(
+        lambda: _execute_claude_code_plan(state.plan, state.project_workspace)
+    )
+
+    return {"result": result}
 
 
 async def git_commit_push_node(state: CodeGenerateInput) -> dict[str, Any]:
@@ -180,31 +211,26 @@ async def git_commit_push_node(state: CodeGenerateInput) -> dict[str, Any]:
     }
 
 
-
-
 async def git_commit_and_push(
     project_workspace: str,
     commit_message: str = "feat: apply Claude Code generated changes",
 ) -> dict[str, Any]:
-    # 确认当前目录在 git 仓库里
     inside_repo, _, _ = await run_cmd(
         ["git", "rev-parse", "--is-inside-work-tree"],
         cwd=project_workspace,
     )
 
     if inside_repo != "true":
-        raise RuntimeError(f"{project_workspace} 不是 git 仓库")
+        raise RuntimeError(f"{project_workspace} is not a git repository")
 
-    # 获取当前分支
     branch, _, _ = await run_cmd(
         ["git", "branch", "--show-current"],
         cwd=project_workspace,
     )
 
     if not branch:
-        raise RuntimeError("当前仓库处于 detached HEAD 状态，无法自动 push")
+        raise RuntimeError("Current repository is in detached HEAD state")
 
-    # 看是否有变更
     status, _, _ = await run_cmd(
         ["git", "status", "--porcelain"],
         cwd=project_workspace,
@@ -213,10 +239,9 @@ async def git_commit_and_push(
     if not status:
         return {
             "status": "no_changes",
-            "message": "Claude Code 执行完成，但没有检测到 git 变更，因此没有 commit/push",
+            "message": "Claude Code 执行完成，但没有检测到 git 变更。",
         }
 
-    # 记录变更文件
     changed_files_output, _, _ = await run_cmd(
         ["git", "diff", "--name-only"],
         cwd=project_workspace,
@@ -230,19 +255,17 @@ async def git_commit_and_push(
     )
 
     changed_files = [
-        line for line in (
-            changed_files_output.splitlines() + untracked_output.splitlines()
-        )
+        line
+        for line in changed_files_output.splitlines()
+        + untracked_output.splitlines()
         if line.strip()
     ]
 
-    # git add
     await run_cmd(
         ["git", "add", "-A"],
         cwd=project_workspace,
     )
 
-    # 确认暂存区是否真的有内容
     staged_status, _, _ = await run_cmd(
         ["git", "diff", "--cached", "--name-status"],
         cwd=project_workspace,
@@ -251,10 +274,9 @@ async def git_commit_and_push(
     if not staged_status:
         return {
             "status": "no_staged_changes",
-            "message": "检测到工作区变更，但 git add 后暂存区为空，没有 commit/push",
+            "message": "检测到 git 变更，但暂存区为空。",
         }
 
-    # commit
     commit_stdout, commit_stderr, _ = await run_cmd(
         ["git", "commit", "-m", commit_message],
         cwd=project_workspace,
@@ -265,7 +287,6 @@ async def git_commit_and_push(
         cwd=project_workspace,
     )
 
-    # 检查当前分支是否有 upstream
     upstream, _, upstream_code = await run_cmd(
         ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
         cwd=project_workspace,
@@ -295,33 +316,40 @@ async def git_commit_and_push(
         "push_stderr": push_stderr,
     }
 
-class GitCommandError(RuntimeError):
-    pass
 
-async def run_cmd(
+def _run_cmd_sync(
     cmd: list[str],
     cwd: str,
-    check: bool = True,
+    check: bool,
 ) -> tuple[str, str, int]:
-    process = await asyncio.create_subprocess_exec(
-        *cmd,
+    completed = subprocess.run(
+        cmd,
         cwd=cwd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
     )
 
-    stdout_bytes, stderr_bytes = await process.communicate()
-
-    stdout = stdout_bytes.decode("utf-8", errors="replace").strip()
-    stderr = stderr_bytes.decode("utf-8", errors="replace").strip()
-    returncode = process.returncode
+    stdout = completed.stdout.strip()
+    stderr = completed.stderr.strip()
+    returncode = completed.returncode
 
     if check and returncode != 0:
         raise GitCommandError(
-            f"命令执行失败: {' '.join(cmd)}\n"
+            f"Command failed: {' '.join(cmd)}\n"
             f"returncode: {returncode}\n"
             f"stdout:\n{stdout}\n"
             f"stderr:\n{stderr}"
         )
 
     return stdout, stderr, returncode
+
+
+async def run_cmd(
+    cmd: list[str],
+    cwd: str,
+    check: bool = True,
+) -> tuple[str, str, int]:
+    return await asyncio.to_thread(_run_cmd_sync, cmd, cwd, check)
