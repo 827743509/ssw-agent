@@ -18,10 +18,8 @@ dependencies = [
   "fastapi>=0.115.0",
   "uvicorn>=0.30.0",
   "tavily-python>=0.5.0",
+  "langgraph-cli[inmem]>=0.4.25",
 ]
-
-[project.scripts]
-openclaw-da = "openclaw_da.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
