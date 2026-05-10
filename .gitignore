@@ -6,3 +6,4 @@ __pycache__/
 workspace/outbox/*.eml
 workspace/calendar/*.jsonl
 workspace/reminders/*.jsonl
+uv.lock
