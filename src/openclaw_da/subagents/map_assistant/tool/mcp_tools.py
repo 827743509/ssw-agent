@@ -28,30 +28,15 @@ def _load_travel_mcp_tools_sync(settings) -> list[Any]:
 
     async def _load():
         client = MultiServerMCPClient({
-            "amap_maps": {
-                "transport": "stdio",
-                "command": "cmd",
-                "args": [
-                    "/c",
-                    "npx",
-                    "-y",
-                    "@amap/amap-maps-mcp-server",
-                ],
-                "env": {
-                    "AMAP_MAPS_API_KEY": settings.amap_maps_api_key,
-                }
+            "12306": {
+                "type": "streamable_http",
+                "url": "https://mcp.api-inference.modelscope.net/e51e662717c146/mcp"
             }
         })
         client2 = MultiServerMCPClient({
             "amap_maps": {
-                "transport": "stdio",
-                "command": "cmd",
-                "args": [
-                    "/c",
-                    "npx",
-                    "-y",
-                    "@amap/amap-maps-mcp-server",
-                ],
+                "type": "streamable_http",
+                "url": "https://mcp.api-inference.modelscope.net/9fd0c66469144c/mcp",
                 "env": {
                     "AMAP_MAPS_API_KEY": settings.amap_maps_api_key,
                 }
