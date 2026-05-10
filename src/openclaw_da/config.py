@@ -42,6 +42,4 @@ class Settings(BaseSettings):
 
 def get_settings() -> Settings:
     settings = Settings()
-    settings.openclaw_workspace.mkdir(parents=True, exist_ok=True)
-    settings.openclaw_data_dir.mkdir(parents=True, exist_ok=True)
     return settings

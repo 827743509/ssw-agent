@@ -1,22 +1,17 @@
 from __future__ import annotations
 
-import json
-from typing import Any
-
 from deepagents import (
     GeneralPurposeSubagentProfile,
     HarnessProfile,
     create_deep_agent,
-    register_harness_profile,
+    register_harness_profile, AsyncSubAgent,
 )
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
-from langgraph.checkpoint.redis import RedisSaver
-from langgraph.types import Command
 
 from openclaw_da.config import get_settings
-from openclaw_da.subaggents.tool.mcp_tools import load_travel_mcp_tools
-from openclaw_da.schemas import ChatRequest, ExtractResult
+
+from openclaw_da.schemas import ExtractResult
 
 
 load_dotenv()
@@ -37,18 +32,16 @@ data_dir = settings.openclaw_data_dir.resolve()
 workspace.mkdir(parents=True, exist_ok=True)
 data_dir.mkdir(parents=True, exist_ok=True)
 
-ttl_config = {
-    "default_ttl": 60 * 24 * 7,  # 7 天，单位为分钟
-    "refresh_on_read": True,
-}
+# ttl_config = {
+#     "default_ttl": 60 * 24 * 7,  # 7 天，单位为分钟
+#     "refresh_on_read": True,
+# }
 
-_checkpointer_cm = RedisSaver.from_conn_string(settings.redis_url, ttl=ttl_config)
-checkpointer = _checkpointer_cm.__enter__()
-checkpointer.setup()
+# _checkpointer_cm = RedisSaver.from_conn_string(settings.redis_url, ttl=ttl_config)
+# checkpointer = _checkpointer_cm.__enter__()
+# checkpointer.setup()
 
 tools = []
-travel_tools = load_travel_mcp_tools(settings)
-
 subagents = [
     AsyncSubAgent(
         name="map_assistant",
@@ -109,7 +102,7 @@ agent = create_deep_agent(
     subagents=subagents,
     interrupt_on={
     },
-    checkpointer=checkpointer,
+    # checkpointer=checkpointer,
     response_format=ExtractResult,
     name="openclaw-da",
 )

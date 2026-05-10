@@ -1,8 +1,8 @@
 {
   "dependencies": ["."],
   "graphs": {
-    "supervisor": "./src/openclaw_da/agent.py:agent",
-    "map_assistant": "./src/openclaw_da/subagents/agent.py:agent"
+    "supervisor": "src/openclaw_da/agent.py:agent",
+    "map_assistant": "src/openclaw_da/subagents/map_assistant/agent.py:agent"
   },
   "env": ".env"
 }
