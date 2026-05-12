@@ -1,6 +1,8 @@
 .venv/
 .env
 .idea
+.langgraph_api
+src/openclaw_deepagents_mvp.egg-info
 __pycache__/
 *.pyc
 workspace/outbox/*.eml

@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 
 from openclaw_da.config import get_settings
+from openclaw_da.mcp_tools import _load_mcp_tools_by_name
 
 from openclaw_da.schemas import ExtractResult
 
@@ -42,11 +43,17 @@ data_dir.mkdir(parents=True, exist_ok=True)
 # checkpointer.setup()
 
 tools = []
+tools.extend(_load_mcp_tools_by_name('ssw'));
 subagents = [
     AsyncSubAgent(
         name="map_assistant",
         description= "用于中国出行规划、高德地图路线规划、地理编码、地点搜索、当前位置查询，以及 12306 火车票余票和车次查询。",
         graph_id="map_assistant",
+    ),
+    AsyncSubAgent(
+        name="baidu_drive",
+        description="用于删除,修改,创建,重命名百度网盘文件。",
+        graph_id="baidu_drive",
     )
 ]
 

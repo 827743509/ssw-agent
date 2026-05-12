@@ -8,8 +8,13 @@ from langchain_openai import ChatOpenAI
 from openclaw_da.config import get_settings
 from openclaw_da.subagents.map_assistant.tool.mcp_tools import load_travel_mcp_tools
 
+_graph_cache = None
+_graph_lock = asyncio.Lock()
 
 async def agent():
+  global _graph_cache
+  if _graph_cache is not None:
+      return _graph_cache
   settings = get_settings()
 
   amap_tools = await load_travel_mcp_tools(settings)
@@ -20,7 +25,7 @@ async def agent():
     base_url=settings.dashscope_base_url,
   )
 
-  return create_agent(
+  _graph_cache=create_agent(
     model=llm,
     tools=amap_tools,
     system_prompt=(
@@ -32,3 +37,4 @@ async def agent():
         "返回结果使用简洁中文，包含可选路线、耗时、费用或票价信息，并明确说明关键假设。"
     ),
   )
+  return _graph_cache

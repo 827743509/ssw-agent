@@ -11,6 +11,27 @@ from openclaw_da.config import Settings
 
 logger = logging.getLogger(__name__)
 
+TRAVEL_MCP_CONNECTIONS = {
+    "railway_12306": {
+        "transport": "streamable_http",
+        "url": "https://mcp.api-inference.modelscope.net/e51e662717c146/mcp",
+    },
+    "amap_maps": {
+        "transport": "streamable_http",
+        "url": "https://mcp.api-inference.modelscope.net/99425a4337f142/mcp",
+    },
+}
+
+
+def _log_mcp_load_error(name: str, error: BaseException) -> None:
+    logger.warning(
+        "加载 %s MCP 工具失败，已跳过：%s: %s",
+        name,
+        type(error).__name__,
+        error,
+    )
+    logger.debug("加载 %s MCP 工具失败详情", name, exc_info=True)
+
 
 def _parse_args(value: str) -> list[str]:
     try:
@@ -23,40 +44,26 @@ def _parse_args(value: str) -> list[str]:
     return parsed
 
 
-def _load_travel_mcp_tools_sync(settings) -> list[Any]:
-
-
+def _load_travel_mcp_tools_sync(settings: Settings) -> list[Any]:
     async def _load():
-        client = MultiServerMCPClient({
-            "12306": {
-                "type": "streamable_http",
-                "url": "https://mcp.api-inference.modelscope.net/e51e662717c146/mcp"
-            }
-        })
-        client2 = MultiServerMCPClient({
-            "amap_maps": {
-                "type": "streamable_http",
-                "url": "https://mcp.api-inference.modelscope.net/9fd0c66469144c/mcp",
-                "env": {
-                    "AMAP_MAPS_API_KEY": settings.amap_maps_api_key,
-                }
-            }
-        })
-        tools=await client.get_tools()
-        tools.extend(await client2.get_tools())
+        tools = []
+        for name, connection in TRAVEL_MCP_CONNECTIONS.items():
+            client = MultiServerMCPClient({name: connection})
+            try:
+                tools.extend(await client.get_tools())
+            except BaseExceptionGroup as exc:
+                _log_mcp_load_error(name, exc)
+            except Exception as exc:
+                _log_mcp_load_error(name, exc)
+
+        if not tools:
+            logger.warning("未加载到任何出行 MCP 工具，map_assistant 将仅使用模型能力回答。")
         return tools
 
     return asyncio.run(_load())
 
 
-async def load_travel_mcp_tools(settings) -> list[Any]:
+async def load_travel_mcp_tools(settings: Settings) -> list[Any]:
     # 避免在 ASGI event loop 里直接执行 shutil.which / os.access
     return await asyncio.to_thread(_load_travel_mcp_tools_sync, settings)
-
-
-
-
-
-
-
 

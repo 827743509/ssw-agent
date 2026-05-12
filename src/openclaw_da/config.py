@@ -7,12 +7,20 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
-    dashscope_api_key: str | None = Field(default=None, alias="DASHSCOPE_API_KEY")
+
     dashscope_base_url: str = Field(
         default="https://dashscope.aliyuncs.com/compatible-mode/v1",
         alias="DASHSCOPE_BASE_URL"
     )
     openclaw_model: str = Field(default="openai:gpt-5.4", alias="OPENCLAW_MODEL")
+    dashscope_api_key: str | None = Field(default=None, alias="DASHSCOPE_API_KEY")
+    moonshot_base_url: str = Field(
+        default="https://api.moonshot.cn/v1",
+        alias="MOONSHOT_BASE_URL"
+    )
+    kimi_model: str = Field(default="kimi-k2.6", alias="KIMI_MODEL")
+    moonshot_api_key: str | None = Field(default=None, alias="MOONSHOT_API_KEY")
+
     redis_url: str = Field(default="redis://localhost:6379", alias="REDIS_URL")
     openclaw_workspace: Path = Field(default=Path("./workspace"), alias="OPENCLAW_WORKSPACE")
     openclaw_data_dir: Path = Field(default=Path("./data"), alias="OPENCLAW_DATA_DIR")

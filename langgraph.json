@@ -2,7 +2,8 @@
   "dependencies": ["."],
   "graphs": {
     "supervisor": "src/openclaw_da/agent.py:agent",
-    "map_assistant": "src/openclaw_da/subagents/map_assistant/agent.py:agent"
+    "map_assistant": "src/openclaw_da/subagents/map_assistant/agent.py:agent",
+    "baidu_drive": "src/openclaw_da/subagents/baidu_drive/agent.py:agent"
   },
   "env": ".env"
 }
