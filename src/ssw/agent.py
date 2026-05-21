@@ -9,21 +9,20 @@ from deepagents import (
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 
-from openclaw_da.config import get_settings
-from openclaw_da.mcp_tools import _load_mcp_tools_by_name
+from ssw.config import get_settings
+from ssw.mcp_tools import _load_mcp_tools_by_name
 
-from openclaw_da.schemas import ExtractResult
+from ssw.schemas import ExtractResult
 
 
 load_dotenv()
 
 SYSTEM_PROMPT = """
-你是 OpenClaw 的主控调度 Agent。你负责分析用户请求、规划步骤、分配给子 Agent，并最终汇总结论。
+你是主控调度 Agent。你负责分析用户请求、规划步骤、分配给子 Agent，并最终汇总结论。
 
 工作要求：
 - 面向用户的回复使用简洁中文。
 - 涉及发送邮件、创建日程等敏感动作时，必须等待人工审批或明确配置允许。
-- 最终回复必须符合 ExtractResult 结构化格式。
 """
 
 settings = get_settings()
@@ -102,7 +101,7 @@ agent = create_deep_agent(
     },
     # checkpointer=checkpointer,
     # response_format=ExtractResult,
-    name="openclaw-da",
+    name="ssw-agent",
 )
 
 

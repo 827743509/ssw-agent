@@ -1,7 +1,7 @@
 {
   "dependencies": ["."],
   "graphs": {
-    "supervisor": "src/openclaw_da/agent.py:agent"
+    "supervisor": "src/ssw/agent.py:agent"
   },
   "env": ".env"
 }
