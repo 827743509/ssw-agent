@@ -45,16 +45,7 @@ data_dir.mkdir(parents=True, exist_ok=True)
 tools = []
 tools.extend(_load_mcp_tools_by_name('ssw'));
 subagents = [
-    AsyncSubAgent(
-        name="map_assistant",
-        description= "用于中国出行规划、高德地图路线规划、地理编码、地点搜索、当前位置查询，以及 12306 火车票余票和车次查询。",
-        graph_id="map_assistant",
-    ),
-    AsyncSubAgent(
-        name="baidu_drive",
-        description="用于删除,修改,创建,重命名百度网盘文件。",
-        graph_id="baidu_drive",
-    )
+
 ]
 
 llm = ChatOpenAI(
@@ -75,7 +66,7 @@ register_harness_profile(
     2. 使用 task 把子任务分发给合适的子 Agent；
     3. 根据子 Agent 返回的结果，汇总成最终答案。
 
-    最终回复时，必须使用 ExtractResult 结构化输出，不要只返回普通文本。
+
 
     规则：
     - 复杂任务必须先规划，再分发。
@@ -110,50 +101,8 @@ agent = create_deep_agent(
     interrupt_on={
     },
     # checkpointer=checkpointer,
-    response_format=ExtractResult,
+    # response_format=ExtractResult,
     name="openclaw-da",
 )
 
-# async def invoke_agent(req: ChatRequest, thread_id: str = "default") -> ExtractResult:
-#
-#     if req.decisions:
-#         result = await _agent.ainvoke(
-#             Command(
-#                 resume={
-#                     "decisions": req.decisions,
-#                 }
-#             ),
-#             config={"configurable": {"thread_id": thread_id}},
-#             version="v2",
-#         )
-#         return result["structured_response"]
-#
-#     result = _agent.ainvoke(
-#         {"messages": [{"role": "user", "content": req.message}]},
-#         config={"configurable": {"thread_id": thread_id}},
-#         version="v2",
-#     )
-#     if result.interrupts:
-#         return ExtractResult(
-#             message="需要人工确认后继续。",
-#             interrupt=True,
-#         )
-#
-#     return result["structured_response"]
-#
-#
-# def _format_value(value: Any) -> str:
-#     if isinstance(value, str):
-#         return value
-#     try:
-#         return json.dumps(value, ensure_ascii=False, indent=2)
-#     except TypeError:
-#         return str(value)
-#
-#
-# def close_agent():
-#     global _checkpointer_cm
-#
-#     if _checkpointer_cm is not None:
-#         _checkpointer_cm.__exit__(None, None, None)
-#         _checkpointer_cm = None
+
