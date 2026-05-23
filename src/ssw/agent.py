@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+from ssw.llm import build_llm
 from deepagents import (
     GeneralPurposeSubagentProfile,
     HarnessProfile,
@@ -12,7 +14,7 @@ from langchain_openai import ChatOpenAI
 from ssw.config import get_settings
 from ssw.mcp_tools import _load_mcp_tools_by_name
 
-from ssw.schemas import ExtractResult
+from ssw.subagents.text_to_sql import text_to_sql_subagent
 
 
 load_dotenv()
@@ -22,13 +24,12 @@ SYSTEM_PROMPT = """
 
 工作要求：
 - 面向用户的回复使用简洁中文。
-- 涉及发送邮件、创建日程等敏感动作时，必须等待人工审批或明确配置允许。
 """
 
 settings = get_settings()
 
-workspace = settings.openclaw_workspace.resolve()
-data_dir = settings.openclaw_data_dir.resolve()
+workspace = Path(settings.ssw_workspace).resolve()
+data_dir  = Path(settings.ssw_data_dir).resolve()
 workspace.mkdir(parents=True, exist_ok=True)
 data_dir.mkdir(parents=True, exist_ok=True)
 
@@ -42,20 +43,16 @@ data_dir.mkdir(parents=True, exist_ok=True)
 # checkpointer.setup()
 
 tools = []
-tools.extend(_load_mcp_tools_by_name('ssw'));
-subagents = [
 
+subagents = [
+    text_to_sql_subagent,
 ]
 
-llm = ChatOpenAI(
-    model=settings.openclaw_model,
-    api_key=settings.dashscope_api_key,
-    base_url=settings.dashscope_base_url,
-)
+llm =build_llm()
 
 # 注册一个精简 profile，限制主 Agent 只做规划、分派和汇总。
 register_harness_profile(
-    "openai:" + settings.openclaw_model,
+    "openai:" + settings.ssw_model,
     HarnessProfile(
         # 替换 DeepAgents 默认基础系统提示词。
         base_system_prompt="""
@@ -64,9 +61,6 @@ register_harness_profile(
     1. 使用 write_todos 维护任务计划；
     2. 使用 task 把子任务分发给合适的子 Agent；
     3. 根据子 Agent 返回的结果，汇总成最终答案。
-
-
-
     规则：
     - 复杂任务必须先规划，再分发。
     - 不要自己执行专业任务，优先交给对应子 Agent。
@@ -74,18 +68,6 @@ register_harness_profile(
     - 不要使用命令行。
     - 子 Agent 返回结果后，你负责判断是否还需要继续分发或汇总。
     """,
-        # 隐藏文件和沙箱相关工具。
-        excluded_tools=frozenset(
-            {
-                "ls",
-                "read_file",
-                "write_file",
-                "edit_file",
-                "execute",
-                "glob",
-                "grep",
-            }
-        ),
         # 关闭默认 general-purpose 子 Agent，只保留显式定义的子 Agent。
         general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
     ),
@@ -100,8 +82,8 @@ agent = create_deep_agent(
     interrupt_on={
     },
     # checkpointer=checkpointer,
-    # response_format=ExtractResult,
     name="ssw-agent",
 )
+
 
 

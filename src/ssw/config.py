@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     )
     ssw_model: str = Field(default="kimi-k2.6", alias="SSW_MODEL")
     ssw_api_key: str | None = Field(default=None, alias="SSW_API_KEY")
+    ssw_workspace: str | None = Field(default=None, alias="SSW_WORKSPACE")
+    ssw_data_dir: str | None = Field(default=None, alias="SSW_DATA_DIR")
 
     redis_url: str = Field(default="redis://localhost:6379", alias="REDIS_URL")
   
