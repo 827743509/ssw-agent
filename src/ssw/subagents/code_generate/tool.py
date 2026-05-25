@@ -19,9 +19,15 @@ from langgraph.types import interrupt
 from ssw.config import get_settings
 from ssw.subagents.code_generate.model import CodeGenerateInput
 
+try:
+    from blockbuster.blockbuster import blockbuster_skip
+except ImportError:
+    blockbuster_skip = None
+
 
 settings = get_settings()
 T = TypeVar("T")
+PROJECT_ROOT = Path(__file__).parents[4]
 
 
 class GitCommandError(RuntimeError):
@@ -40,14 +46,26 @@ def _claude_cli_path() -> Path | None:
     if not cli_path:
         return None
 
-    return Path(cli_path).expanduser()
+    return _absolute_path(cli_path)
+
+
+def _absolute_path(path: str | Path) -> Path:
+    candidate = Path(path).expanduser()
+    if candidate.is_absolute():
+        return candidate
+
+    return PROJECT_ROOT / candidate
 
 
 def _project_workspace(project_workspace: str | None) -> Path:
     if not project_workspace:
         raise RuntimeError("project_workspace is required before running Claude Code")
 
-    return Path(project_workspace).resolve()
+    return _absolute_path(project_workspace)
+
+
+def _workspace_base_dir() -> Path:
+    return _absolute_path(settings.ssw_workspace or "workspace")
 
 
 def _claude_options(project_workspace: str, permission_mode: str) -> ClaudeAgentOptions:
@@ -62,6 +80,10 @@ def _claude_options(project_workspace: str, permission_mode: str) -> ClaudeAgent
 def _run_coroutine_in_isolated_loop(
     coroutine_factory: Callable[[], Awaitable[T]],
 ) -> T:
+    skip_token = None
+    if blockbuster_skip is not None:
+        skip_token = blockbuster_skip.set(True)
+
     if sys.platform == "win32":
         loop = asyncio.ProactorEventLoop()
     else:
@@ -73,6 +95,8 @@ def _run_coroutine_in_isolated_loop(
     finally:
         asyncio.set_event_loop(None)
         loop.close()
+        if blockbuster_skip is not None and skip_token is not None:
+            blockbuster_skip.reset(skip_token)
 
 
 async def _run_in_isolated_loop(
@@ -82,10 +106,10 @@ async def _run_in_isolated_loop(
 
 
 async def create_workspace(state: CodeGenerateInput) -> dict[str, str]:
-    base_dir = Path(settings.ssw_workspace or "workspace").resolve()
+    base_dir = _workspace_base_dir()
     code_workspace = base_dir / state.project_name
 
-    if not code_workspace.exists():
+    if not await asyncio.to_thread(code_workspace.exists):
         await asyncio.to_thread(base_dir.mkdir, parents=True, exist_ok=True)
         await run_cmd(["git", "clone", state.url, str(code_workspace)], str(base_dir))
         await run_cmd(["git", "checkout", state.branch], str(code_workspace))
