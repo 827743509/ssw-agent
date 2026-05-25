@@ -6,7 +6,7 @@ from deepagents import CompiledSubAgent, create_deep_agent, register_harness_pro
 from deepagents.backends.filesystem import FilesystemBackend
 
 from ssw.llm import build_llm, settings
-from ssw.subagents.text_to_sql.tool.schema import validate_select_sql
+from ssw.subagents.text_to_sql.tool import validate_select_sql
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 SKILLS_PATH = "/src/ssw/subagents/text_to_sql/skills"
@@ -28,7 +28,7 @@ SQL 规范：
 - 字段和表名优先使用反引号包裹。
 - 不使用 SELECT *，除非用户明确要求所有字段。
 - 涉及时间范围时写清楚边界条件。
-- 涉及分页时默认 LIMIT 10，除非用户指定数量。
+- 涉及分页时默认返回10条，除非用户指定数量。
 - 对可能重复的业务实体，优先使用 COUNT(DISTINCT ...)。
 """
 

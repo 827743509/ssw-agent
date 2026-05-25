@@ -27,5 +27,5 @@ langgraph dev
 
 ## 子agent创建规范
 ### 创建一新的子agent时,需要在 `src/ssw/subagents` 下创建一个子agent目录。改目录包含skills(子agent特有的技能)和tool(子agent特有的工具) 并且需要在langgraph.json下面注册
-### agent的skills目录需要使用相对路径像这样 `skills=["./src/ssw/subagents/text_to_sql/skills"]`
+
 

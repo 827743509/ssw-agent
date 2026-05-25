@@ -2,7 +2,8 @@
   "dependencies": ["."],
   "graphs": {
     "supervisor": "src/ssw/agent.py:agent",
-    "text_to_sql_agent": "src/ssw/subagents/text_to_sql/agent.py:text_to_sql_agent"
+    "text_to_sql_agent": "src/ssw/subagents/text_to_sql/agent.py:text_to_sql_agent",
+    "code_generate": "src/ssw/subagents/code_generate/agent.py:graph"
   },
   "env": ".env"
 }
