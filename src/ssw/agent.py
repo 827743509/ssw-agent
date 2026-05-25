@@ -58,16 +58,6 @@ subagents = [
 
 llm =build_llm()
 
-# # 注册一个精简 profile，限制主 Agent 只做规划、分派和汇总。
-# register_harness_profile(
-#     "openai:" + settings.ssw_model,
-#     HarnessProfile(
-#         # 替换 DeepAgents 默认基础系统提示词。
-#         base_system_prompt=SYSTEM_PROMPT,
-#         # 关闭默认 general-purpose 子 Agent，只保留显式定义的子 Agent。
-#         general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
-#     ),
-# )
 
 agent = create_deep_agent(
     model=llm,
