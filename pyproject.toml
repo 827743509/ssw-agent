@@ -1,5 +1,9 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
-name = "openclaw-deepagents-mvp"
+name = "ssw-agent"
 version = "0.1.0"
 description = "OpenClaw-like personal AI assistant MVP built with LangChain Deep Agents"
 readme = "README.md"
@@ -20,6 +24,7 @@ dependencies = [
   "langgraph-cli[inmem]>=0.4.25",
   "langgraph-checkpoint-redis>=0.4.1",
   "claude-agent-sdk>=0.2.87",
+  "fastapi>=0.136.3",
 ]
 
 [tool.setuptools.packages.find]

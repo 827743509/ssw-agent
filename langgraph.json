@@ -3,7 +3,10 @@
   "graphs": {
     "supervisor": "src/ssw/agent.py:agent",
     "text_to_sql_agent": "src/ssw/subagents/text_to_sql/agent.py:text_to_sql_agent",
-    "code_generate": "src/ssw/subagents/code_generate/agent.py:graph"
+    "default_agent": "src/ssw/subagents/default/agent.py:default_agent"
+  },
+  "http": {
+    "app": "src/ssw/server.py:app"
   },
   "env": ".env"
 }

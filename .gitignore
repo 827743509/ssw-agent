@@ -11,3 +11,6 @@ workspace/outbox/*.eml
 workspace/calendar/*.jsonl
 workspace/reminders/*.jsonl
 uv.lock
+web/node_modules/
+web/dist/
+src/ssw_agent.egg-info
