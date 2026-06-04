@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 
 from ssw.config import get_settings
-from ssw.mcp_tools import _load_mcp_tools_by_name
+
 
 from ssw.subagents.text_to_sql import text_to_sql_subagent
 
@@ -32,6 +32,7 @@ SYSTEM_PROMPT = """
     - 不要读写文件。
     - 不要使用命令行。
     - 子 Agent 返回结果后，你负责判断是否还需要继续分发或汇总。
+    - 生成SQL相关任务直接调用text-to-sql不要拆解任务。
     """
 
 settings = get_settings()

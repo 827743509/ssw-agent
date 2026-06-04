@@ -2,14 +2,24 @@ import { Client } from "@langchain/langgraph-sdk";
 
 export type AgentId = "supervisor" | "text_to_sql_agent" | "default_agent";
 
+export type ToolCallStatus = "running" | "done" | "error";
+
+export type ToolCallProgress = {
+  id: string;
+  name: string;
+  node?: string;
+  status: ToolCallStatus;
+};
+
 export type StreamProgress = {
   node?: string;
   detail: string;
 };
 
 export type StreamCallbacks = {
-  onToken: (token: string) => void;
+  onToolCall: (toolCall: ToolCallProgress) => void;
   onProgress: (progress: StreamProgress) => void;
+  onFinal: (content: string) => void;
   onDone: () => void;
   onError: (message: string) => void;
 };
@@ -20,25 +30,31 @@ const client = new Client({
   apiUrl,
 });
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
 function readContentPart(part: unknown): string {
   if (typeof part === "string") {
     return part;
   }
 
-  if (part && typeof part === "object" && "text" in part) {
-    const text = (part as { text?: unknown }).text;
-    return typeof text === "string" ? text : "";
-  }
-
-  return "";
-}
-
-function extractTextFromMessage(message: unknown): string {
-  if (!message || typeof message !== "object") {
+  const partRecord = asRecord(part);
+  if (!partRecord) {
     return "";
   }
 
-  const content = (message as { content?: unknown }).content;
+  const text = partRecord.text;
+  return typeof text === "string" ? text : "";
+}
+
+function extractTextFromMessage(message: unknown): string {
+  const messageRecord = asRecord(message);
+  if (!messageRecord) {
+    return "";
+  }
+
+  const content = messageRecord.content;
   if (typeof content === "string") {
     return content;
   }
@@ -50,43 +66,112 @@ function extractTextFromMessage(message: unknown): string {
   return "";
 }
 
-function extractToken(chunk: unknown): string {
-  if (Array.isArray(chunk)) {
-    return extractTextFromMessage(chunk[0]);
+function messageType(message: unknown): string {
+  const messageRecord = asRecord(message);
+  if (!messageRecord) {
+    return "";
   }
 
-  if (chunk && typeof chunk === "object") {
-    const data = chunk as { data?: unknown; event?: unknown };
-    if (Array.isArray(data.data)) {
-      return extractTextFromMessage(data.data[0]);
-    }
-
-    return extractTextFromMessage(data.data);
+  const directType = messageRecord.type;
+  if (typeof directType === "string") {
+    return directType;
   }
 
-  return "";
+  const id = messageRecord.id;
+  return typeof id === "string" ? id : "";
 }
 
-function summarizeUpdate(chunk: unknown): StreamProgress | null {
-  if (!chunk || typeof chunk !== "object") {
-    return null;
+function messageLooksLikeAi(message: unknown): boolean {
+  const type = messageType(message).toLowerCase();
+  return type.includes("ai") || type.includes("assistant");
+}
+
+function messageLooksLikeTool(message: unknown): boolean {
+  const type = messageType(message).toLowerCase();
+  return type.includes("tool");
+}
+
+function extractToolCalls(message: unknown): Array<{ id: string; name: string }> {
+  const messageRecord = asRecord(message);
+  if (!messageRecord) {
+    return [];
   }
 
-  const payload = "data" in chunk ? (chunk as { data?: unknown }).data : chunk;
-  if (!payload || typeof payload !== "object") {
-    return null;
+  const candidates = [
+    messageRecord.tool_calls,
+    messageRecord.toolCalls,
+    messageRecord.additional_kwargs && asRecord(messageRecord.additional_kwargs)?.tool_calls,
+  ];
+
+  const toolCalls: Array<{ id: string; name: string }> = [];
+  for (const candidate of candidates) {
+    if (!Array.isArray(candidate)) {
+      continue;
+    }
+
+    for (const item of candidate) {
+      const itemRecord = asRecord(item);
+      if (!itemRecord) {
+        continue;
+      }
+
+      const rawFunction = asRecord(itemRecord.function);
+      const name = itemRecord.name || rawFunction?.name;
+      const id = itemRecord.id || name;
+      if (typeof id === "string" && typeof name === "string") {
+        toolCalls.push({ id, name });
+      }
+    }
   }
 
-  const [node, value] = Object.entries(payload as Record<string, unknown>)[0] ?? [];
-  if (!node) {
-    return null;
+  return toolCalls;
+}
+
+function extractNode(metadata: unknown, fallback?: string): string | undefined {
+  const metadataRecord = asRecord(metadata);
+  const node = metadataRecord?.langgraph_node || metadataRecord?.node;
+  return typeof node === "string" && node ? node : fallback;
+}
+
+function unpackMessageTuple(chunk: unknown): { message: unknown; metadata: unknown } | null {
+  const chunkRecord = asRecord(chunk);
+  const data = chunkRecord && "data" in chunkRecord ? chunkRecord.data : chunk;
+
+  if (Array.isArray(data)) {
+    return {
+      message: data[0],
+      metadata: data[1],
+    };
   }
 
-  if (value && typeof value === "object" && "messages" in value) {
-    return { node, detail: "正在更新消息" };
+  return {
+    message: data,
+    metadata: undefined,
+  };
+}
+
+function iterUpdateMessages(chunk: unknown): Array<{ node?: string; message: unknown }> {
+  const chunkRecord = asRecord(chunk);
+  const payload = chunkRecord && "data" in chunkRecord ? chunkRecord.data : chunk;
+  const payloadRecord = asRecord(payload);
+  if (!payloadRecord) {
+    return [];
   }
 
-  return { node, detail: "正在处理" };
+  const messages: Array<{ node?: string; message: unknown }> = [];
+  for (const [node, value] of Object.entries(payloadRecord)) {
+    const valueRecord = asRecord(value);
+    const nodeMessages = valueRecord?.messages;
+    if (!Array.isArray(nodeMessages)) {
+      continue;
+    }
+
+    for (const message of nodeMessages) {
+      messages.push({ node, message });
+    }
+  }
+
+  return messages;
 }
 
 export async function streamAgentAnswer(
@@ -94,11 +179,70 @@ export async function streamAgentAnswer(
   question: string,
   signal: AbortSignal,
   callbacks: StreamCallbacks,
+  context?: string,
 ): Promise<void> {
+  const seenToolCalls = new Set<string>();
+  const finishedToolCalls = new Set<string>();
+  const toolNamesById = new Map<string, string>();
+  let finalText = "";
+
+  function emitToolStart(tool: { id: string; name: string }, node?: string): void {
+    if (seenToolCalls.has(tool.id)) {
+      return;
+    }
+
+    seenToolCalls.add(tool.id);
+    toolNamesById.set(tool.id, tool.name);
+    callbacks.onToolCall({
+      id: tool.id,
+      name: tool.name,
+      node,
+      status: "running",
+    });
+    callbacks.onProgress({ node, detail: `正在调用 ${tool.name}` });
+  }
+
+  function emitToolEnd(message: unknown, node?: string): void {
+    const record = asRecord(message);
+    const id = record?.tool_call_id || record?.toolCallId || record?.name;
+    if (typeof id !== "string" || finishedToolCalls.has(id)) {
+      return;
+    }
+
+    finishedToolCalls.add(id);
+    const name = toolNamesById.get(id) || (typeof record?.name === "string" ? record.name : "tool");
+    callbacks.onToolCall({
+      id,
+      name,
+      node,
+      status: "done",
+    });
+    callbacks.onProgress({ node, detail: `${name} 已完成` });
+  }
+
+  function inspectMessage(message: unknown, node?: string, updateFinal = false): void {
+    for (const toolCall of extractToolCalls(message)) {
+      emitToolStart(toolCall, node);
+    }
+
+    if (messageLooksLikeTool(message)) {
+      emitToolEnd(message, node);
+    }
+
+    if (updateFinal && messageLooksLikeAi(message)) {
+      const text = extractTextFromMessage(message).trim();
+      if (text) {
+        finalText = text;
+      }
+    }
+  }
+
   try {
+    callbacks.onProgress({ detail: "模型正在处理" });
+
     const stream = client.runs.stream(null, agentId, {
       input: {
-        messages: [{ role: "user", content: question }],
+        messages: [{ role: "user", content: context ? `${context}\n\n用户问题：${question}` : question }],
       },
       streamMode: ["messages-tuple", "updates"],
       streamSubgraphs: true,
@@ -110,26 +254,25 @@ export async function streamAgentAnswer(
         break;
       }
 
-      const event = typeof chunk === "object" && chunk && "event" in chunk
-        ? String((chunk as { event?: unknown }).event)
-        : "";
+      const event = asRecord(chunk)?.event;
+      const eventName = typeof event === "string" ? event : "";
 
-      if (event.includes("messages")) {
-        const token = extractToken(chunk);
-        if (token) {
-          callbacks.onToken(token);
+      if (eventName.includes("messages")) {
+        const tuple = unpackMessageTuple(chunk);
+        if (tuple) {
+          inspectMessage(tuple.message, extractNode(tuple.metadata));
         }
         continue;
       }
 
-      if (event.includes("updates")) {
-        const progress = summarizeUpdate(chunk);
-        if (progress) {
-          callbacks.onProgress(progress);
+      if (eventName.includes("updates")) {
+        for (const { node, message } of iterUpdateMessages(chunk)) {
+          inspectMessage(message, node, true);
         }
       }
     }
 
+    callbacks.onFinal(finalText);
     callbacks.onDone();
   } catch (error) {
     if (signal.aborted) {

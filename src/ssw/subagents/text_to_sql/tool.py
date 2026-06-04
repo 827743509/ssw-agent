@@ -28,8 +28,7 @@ def validate_select_sql(sql: str) -> dict[str, object]:
     if ";" in sql_without_tail_semicolon:
         issues.append("只允许单条 SQL，不能包含多个语句。")
 
-    lowered = sql_without_tail_semicolon.lower()
-    if not (lowered.startswith("select ") or lowered.startswith("with ")):
+    if not re.match(r"^(select|with)\b", sql_without_tail_semicolon, re.IGNORECASE):
         issues.append("只允许 SELECT 或 WITH 开头的查询 SQL。")
 
     if "--" in normalized or "/*" in normalized or "*/" in normalized:

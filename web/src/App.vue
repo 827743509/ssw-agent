@@ -1,20 +1,37 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import {
   Bot,
+  CheckCircle2,
   CircleStop,
   Database,
+  LoaderCircle,
+  Plus,
   RotateCcw,
+  Save,
   Send,
+  Server,
   Sparkles,
   Workflow,
+  Wrench,
+  X,
+  Zap,
 } from "@lucide/vue";
 import mascotUrl from "./assets/assistant-mascot.png";
 import {
   type AgentId,
+  type ToolCallProgress,
   getLangGraphApiUrl,
   streamAgentAnswer,
 } from "./services/langgraph";
+import {
+  type DataSourceCreate,
+  type DataSourceSummary,
+  type DataSourceType,
+  createDataSource,
+  generateDataSourceSkill,
+  listDataSources,
+} from "./services/datasources";
 
 type ChatRole = "user" | "assistant";
 
@@ -24,6 +41,7 @@ type ChatMessage = {
   content: string;
   agent?: AgentId;
   status?: "streaming" | "done" | "error" | "stopped";
+  toolCalls?: ToolCallProgress[];
 };
 
 const agents: Array<{
@@ -61,19 +79,174 @@ const messages = ref<ChatMessage[]>([
     id: crypto.randomUUID(),
     role: "assistant",
     agent: "supervisor",
-    content: "你好，我是 SSW Agent。选择一个智能体后直接提问，我会用流式输出回复你。",
+    content: "你好，我是 SSW Agent。选择一个智能体后直接提问，我会在等待时展示工具调用过程，并在完成后输出最终回答。",
     status: "done",
   },
 ]);
+
+const dataSources = ref<DataSourceSummary[]>([]);
+const selectedDataSourceId = ref(localStorage.getItem("ssw.selectedDataSource") || "");
+const isLoadingDataSources = ref(false);
+const isSavingDataSource = ref(false);
+const isGeneratingSkill = ref(false);
+const showDataSourceForm = ref(false);
+const dataSourceError = ref("");
+const dataSourceForm = ref<DataSourceCreate>({
+  name: "",
+  type: "mysql",
+  host: "127.0.0.1",
+  port: 3306,
+  database: "",
+  username: "",
+  password: "",
+  skill_body: "",
+});
 
 const scrollRef = ref<HTMLElement | null>(null);
 const abortController = ref<AbortController | null>(null);
 
 const activeAgent = computed(() => agents.find((agent) => agent.id === selectedAgent.value) ?? agents[0]);
-const canSend = computed(() => inputText.value.trim().length > 0 && !isStreaming.value);
+const selectedDataSource = computed(() => (
+  dataSources.value.find((source) => source.id === selectedDataSourceId.value) ?? null
+));
+const canSend = computed(() => {
+  if (!inputText.value.trim() || isStreaming.value) {
+    return false;
+  }
+
+  return selectedAgent.value !== "text_to_sql_agent" || Boolean(selectedDataSource.value);
+});
+const canGenerateSkill = computed(() => (
+  Boolean(dataSourceForm.value.name.trim())
+  && Boolean(dataSourceForm.value.host.trim())
+  && Boolean(dataSourceForm.value.database.trim())
+  && Boolean(dataSourceForm.value.username.trim())
+  && dataSourceForm.value.port > 0
+  && !isGeneratingSkill.value
+));
+const canSaveDataSource = computed(() => (
+  Boolean(dataSourceForm.value.skill_body.trim())
+  && !isSavingDataSource.value
+  && !isGeneratingSkill.value
+));
+
+watch(selectedDataSourceId, (value) => {
+  if (value) {
+    localStorage.setItem("ssw.selectedDataSource", value);
+  } else {
+    localStorage.removeItem("ssw.selectedDataSource");
+  }
+});
+
+watch(() => dataSourceForm.value.type, (type) => {
+  dataSourceForm.value.port = type === "mysql" ? 3306 : 8123;
+});
+
+onMounted(() => {
+  void refreshDataSources();
+});
 
 function agentLabel(agentId?: AgentId): string {
   return agents.find((agent) => agent.id === agentId)?.label ?? "SSW Agent";
+}
+
+function dataSourceTypeLabel(type: DataSourceType): string {
+  return type === "mysql" ? "MySQL" : "ClickHouse";
+}
+
+function buildTextToSqlContext(): string | undefined {
+  if (selectedAgent.value !== "text_to_sql_agent" || !selectedDataSource.value) {
+    return undefined;
+  }
+
+  const source = selectedDataSource.value;
+  return [
+    "当前 Text to SQL 数据源：",
+    `- 名称：${source.name}`,
+    `- 类型：${dataSourceTypeLabel(source.type)}`,
+    `- Host：${source.host}`,
+    `- Port：${source.port}`,
+    `- Database：${source.database}`,
+    `- Skill：${source.skill_path}`,
+    "",
+    `请优先读取并使用该数据源对应的 skill 文档，生成 ${dataSourceTypeLabel(source.type)} 方言的只读查询 SQL。`,
+  ].join("\n");
+}
+
+async function refreshDataSources(): Promise<void> {
+  isLoadingDataSources.value = true;
+  dataSourceError.value = "";
+
+  try {
+    dataSources.value = await listDataSources();
+    if (selectedDataSourceId.value && !selectedDataSource.value) {
+      selectedDataSourceId.value = "";
+    }
+    if (!selectedDataSourceId.value && dataSources.value.length) {
+      selectedDataSourceId.value = dataSources.value[0].id;
+    }
+  } catch (error) {
+    dataSourceError.value = error instanceof Error ? error.message : "加载数据源失败";
+  } finally {
+    isLoadingDataSources.value = false;
+  }
+}
+
+function resetDataSourceForm(): void {
+  dataSourceForm.value = {
+    name: "",
+    type: "mysql",
+    host: "127.0.0.1",
+    port: 3306,
+    database: "",
+    username: "",
+    password: "",
+    skill_body: "",
+  };
+  dataSourceError.value = "";
+}
+
+async function generateSkill(): Promise<void> {
+  dataSourceError.value = "";
+  isGeneratingSkill.value = true;
+
+  try {
+    const generated = await generateDataSourceSkill({
+      name: dataSourceForm.value.name,
+      type: dataSourceForm.value.type,
+      host: dataSourceForm.value.host,
+      port: dataSourceForm.value.port,
+      database: dataSourceForm.value.database,
+      username: dataSourceForm.value.username,
+      password: dataSourceForm.value.password,
+    });
+    dataSourceForm.value.skill_body = generated.skill_body;
+    dataSourceError.value = `已生成 ${generated.table_count} 张表、${generated.column_count} 个字段的 Skill 文档，可继续编辑。`;
+  } catch (error) {
+    dataSourceError.value = error instanceof Error ? error.message : "生成 Skill 失败";
+  } finally {
+    isGeneratingSkill.value = false;
+  }
+}
+
+async function saveDataSource(): Promise<void> {
+  dataSourceError.value = "";
+  isSavingDataSource.value = true;
+
+  try {
+    const created = await createDataSource(dataSourceForm.value);
+    dataSources.value = [
+      ...dataSources.value.filter((source) => source.id !== created.id),
+      created,
+    ];
+    selectedDataSourceId.value = created.id;
+    showDataSourceForm.value = false;
+    resetDataSourceForm();
+  } catch (error) {
+    dataSourceError.value = error instanceof Error ? error.message : "创建数据源失败";
+  } finally {
+    isSavingDataSource.value = false;
+  }
 }
 
 async function scrollToBottom(): Promise<void> {
@@ -91,6 +264,21 @@ function resetChat(): void {
 
   messages.value = [];
   progressText.value = "已清空";
+}
+
+function upsertToolCall(message: ChatMessage, toolCall: ToolCallProgress): void {
+  const toolCalls = message.toolCalls ?? [];
+  const existing = toolCalls.find((item) => item.id === toolCall.id);
+
+  if (existing) {
+    existing.name = toolCall.name;
+    existing.node = toolCall.node || existing.node;
+    existing.status = toolCall.status;
+  } else {
+    toolCalls.push(toolCall);
+  }
+
+  message.toolCalls = toolCalls;
 }
 
 function stopStreaming(): void {
@@ -112,6 +300,18 @@ async function sendMessage(): Promise<void> {
     return;
   }
 
+  if (selectedAgent.value === "text_to_sql_agent" && !selectedDataSource.value) {
+    messages.value.push({
+      id: crypto.randomUUID(),
+      role: "assistant",
+      agent: "text_to_sql_agent",
+      content: "请先在左侧添加并选择一个数据源。",
+      status: "error",
+    });
+    await scrollToBottom();
+    return;
+  }
+
   const agentId = selectedAgent.value;
   const assistantMessage: ChatMessage = {
     id: crypto.randomUUID(),
@@ -119,6 +319,7 @@ async function sendMessage(): Promise<void> {
     agent: agentId,
     content: "",
     status: "streaming",
+    toolCalls: [],
   };
 
   messages.value.push({
@@ -131,19 +332,23 @@ async function sendMessage(): Promise<void> {
 
   inputText.value = "";
   isStreaming.value = true;
-  progressText.value = `${agentLabel(agentId)} 正在思考`;
+  progressText.value = `${agentLabel(agentId)} 正在处理`;
   abortController.value = new AbortController();
   await scrollToBottom();
 
   await streamAgentAnswer(agentId, question, abortController.value.signal, {
-    onToken(token) {
-      assistantMessage.content += token;
+    onToolCall(toolCall) {
+      upsertToolCall(assistantMessage, toolCall);
       void scrollToBottom();
     },
     onProgress(progress) {
       progressText.value = progress.node
         ? `${progress.node} · ${progress.detail}`
         : progress.detail;
+    },
+    onFinal(content) {
+      assistantMessage.content = content || "本次运行没有返回最终文本。";
+      void scrollToBottom();
     },
     onDone() {
       if (assistantMessage.status === "streaming") {
@@ -164,7 +369,7 @@ async function sendMessage(): Promise<void> {
       abortController.value = null;
       void scrollToBottom();
     },
-  });
+  }, buildTextToSqlContext());
 }
 
 function handleKeydown(event: KeyboardEvent): void {
@@ -183,12 +388,12 @@ function handleKeydown(event: KeyboardEvent): void {
         </div>
         <div>
           <p class="eyebrow">SSW Agent</p>
-          <h1>次元问答终端</h1>
+          <h1>盐汽水问答终端</h1>
         </div>
       </div>
 
       <div class="mascot-panel">
-        <img :src="mascotUrl" alt="SSW Agent 二次元助手" />
+        <img :src="mascotUrl" alt="SSW Agent 助手形象" />
       </div>
 
       <div class="agent-panel">
@@ -210,6 +415,95 @@ function handleKeydown(event: KeyboardEvent): void {
           </button>
         </div>
       </div>
+
+      <section v-if="selectedAgent === 'text_to_sql_agent'" class="datasource-panel">
+        <div class="panel-heading">
+          <p class="panel-title">数据源</p>
+          <button
+            class="mini-icon-button"
+            type="button"
+            title="添加数据源"
+            @click="showDataSourceForm = !showDataSourceForm"
+          >
+            <X v-if="showDataSourceForm" :size="16" />
+            <Plus v-else :size="16" />
+          </button>
+        </div>
+
+        <label class="field-label">
+          <span>当前数据源</span>
+          <select v-model="selectedDataSourceId" :disabled="isLoadingDataSources || !dataSources.length">
+            <option value="">未选择</option>
+            <option v-for="source in dataSources" :key="source.id" :value="source.id">
+              {{ source.name }} · {{ dataSourceTypeLabel(source.type) }}
+            </option>
+          </select>
+        </label>
+
+        <div v-if="selectedDataSource" class="datasource-summary">
+          <Server :size="16" />
+          <span>{{ selectedDataSource.host }}:{{ selectedDataSource.port }}/{{ selectedDataSource.database }}</span>
+        </div>
+
+        <form v-if="showDataSourceForm" class="datasource-form" @submit.prevent="saveDataSource">
+          <label class="field-label">
+            <span>名称</span>
+            <input v-model.trim="dataSourceForm.name" required placeholder="blog_prod" />
+          </label>
+          <label class="field-label">
+            <span>类型</span>
+            <select v-model="dataSourceForm.type">
+              <option value="mysql">MySQL</option>
+              <option value="clickhouse">ClickHouse</option>
+            </select>
+          </label>
+          <div class="field-grid">
+            <label class="field-label">
+              <span>Host</span>
+              <input v-model.trim="dataSourceForm.host" required />
+            </label>
+            <label class="field-label">
+              <span>Port</span>
+              <input v-model.number="dataSourceForm.port" required type="number" min="1" max="65535" />
+            </label>
+          </div>
+          <label class="field-label">
+            <span>Database</span>
+            <input v-model.trim="dataSourceForm.database" required />
+          </label>
+          <div class="field-grid">
+            <label class="field-label">
+              <span>Username</span>
+              <input v-model.trim="dataSourceForm.username" required />
+            </label>
+            <label class="field-label">
+              <span>Password</span>
+              <input v-model="dataSourceForm.password" type="password" autocomplete="new-password" />
+            </label>
+          </div>
+          <div class="form-actions">
+            <button class="secondary-button" type="button" :disabled="!canGenerateSkill" @click="generateSkill">
+              <Zap :size="16" />
+              {{ isGeneratingSkill ? "生成中" : "连接并生成" }}
+            </button>
+          </div>
+          <label class="field-label">
+            <span>Skill 文档</span>
+            <textarea
+              v-model="dataSourceForm.skill_body"
+              required
+              rows="8"
+              placeholder="点击连接并生成，或手动填写 Skill Markdown 正文"
+            />
+          </label>
+          <button class="secondary-button" type="submit" :disabled="!canSaveDataSource">
+            <Save :size="16" />
+            {{ isSavingDataSource ? "保存中" : "保存 Skill" }}
+          </button>
+        </form>
+
+        <p v-if="dataSourceError" class="inline-error">{{ dataSourceError }}</p>
+      </section>
 
       <div class="status-card">
         <span class="pulse-dot" :class="{ streaming: isStreaming }"></span>
@@ -246,8 +540,30 @@ function handleKeydown(event: KeyboardEvent): void {
             <div v-if="message.role === 'assistant'" class="bubble-meta">
               {{ agentLabel(message.agent) }}
             </div>
-            <p>{{ message.content }}</p>
-            <span v-if="message.status === 'streaming'" class="typing-caret"></span>
+
+            <div
+              v-if="message.role === 'assistant' && message.status === 'streaming'"
+              class="tool-progress"
+            >
+              <div v-if="!message.toolCalls?.length" class="tool-row running">
+                <LoaderCircle :size="16" />
+                <span>模型正在处理</span>
+              </div>
+              <div
+                v-for="tool in message.toolCalls"
+                :key="tool.id"
+                class="tool-row"
+                :class="tool.status"
+              >
+                <LoaderCircle v-if="tool.status === 'running'" :size="16" />
+                <CheckCircle2 v-else-if="tool.status === 'done'" :size="16" />
+                <Wrench v-else :size="16" />
+                <span>{{ tool.name }}</span>
+                <small v-if="tool.node">{{ tool.node }}</small>
+              </div>
+            </div>
+
+            <p v-if="message.content">{{ message.content }}</p>
           </div>
         </article>
       </div>
