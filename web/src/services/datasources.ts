@@ -1,0 +1,77 @@
+export type DataSourceType = "mysql" | "clickhouse";
+
+export type DataSourceSummary = {
+  id: string;
+  name: string;
+  type: DataSourceType;
+  host: string;
+  port: number;
+  database: string;
+  username: string;
+  skill_path: string;
+  skill_body?: string | null;
+};
+
+export type DataSourceConnection = {
+  name: string;
+  type: DataSourceType;
+  host: string;
+  port: number;
+  database: string;
+  username: string;
+  password: string;
+};
+
+export type DataSourceCreate = DataSourceConnection & {
+  skill_body: string;
+};
+
+export type GeneratedSkill = {
+  skill_body: string;
+  table_count: number;
+  column_count: number;
+};
+
+const apiUrl = import.meta.env.VITE_LANGGRAPH_API_URL || "http://127.0.0.1:2024";
+
+export async function listDataSources(): Promise<DataSourceSummary[]> {
+  const response = await fetch(`${apiUrl}/database/datasources`);
+  if (!response.ok) {
+    throw new Error(`加载数据源失败：${response.status}`);
+  }
+  return (await response.json()) as DataSourceSummary[];
+}
+
+export async function createDataSource(input: DataSourceCreate): Promise<DataSourceSummary> {
+  const response = await fetch(`${apiUrl}/database/datasources/add`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(input),
+  });
+
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || `创建数据源失败：${response.status}`);
+  }
+
+  return (await response.json()) as DataSourceSummary;
+}
+
+export async function generateDataSourceSkill(input: DataSourceConnection): Promise<GeneratedSkill> {
+  const response = await fetch(`${apiUrl}/database/datasources/generate-schema`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(input),
+  });
+
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || `生成 Skill 失败：${response.status}`);
+  }
+
+  return (await response.json()) as GeneratedSkill;
+}
