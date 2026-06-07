@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   CircleStop,
   Database,
+  Download,
   LoaderCircle,
   Plus,
   RotateCcw,
@@ -12,6 +13,8 @@ import {
   Send,
   Server,
   Sparkles,
+  Trash2,
+  Upload,
   Workflow,
   Wrench,
   X,
@@ -29,8 +32,11 @@ import {
   type DataSourceSummary,
   type DataSourceType,
   createDataSource,
+  deleteDataSource,
+  downloadDataSourceSkill,
   generateDataSourceSkill,
   listDataSources,
+  replaceDataSourceSkill,
 } from "./services/datasources";
 
 type ChatRole = "user" | "assistant";
@@ -89,6 +95,8 @@ const selectedDataSourceId = ref(localStorage.getItem("ssw.selectedDataSource") 
 const isLoadingDataSources = ref(false);
 const isSavingDataSource = ref(false);
 const isGeneratingSkill = ref(false);
+const isReplacingSkill = ref(false);
+const isDeletingDataSource = ref(false);
 const showDataSourceForm = ref(false);
 const dataSourceError = ref("");
 const dataSourceForm = ref<DataSourceCreate>({
@@ -103,6 +111,7 @@ const dataSourceForm = ref<DataSourceCreate>({
 });
 
 const scrollRef = ref<HTMLElement | null>(null);
+const skillUploadInputRef = ref<HTMLInputElement | null>(null);
 const abortController = ref<AbortController | null>(null);
 
 const activeAgent = computed(() => agents.find((agent) => agent.id === selectedAgent.value) ?? agents[0]);
@@ -246,6 +255,82 @@ async function saveDataSource(): Promise<void> {
     dataSourceError.value = error instanceof Error ? error.message : "创建数据源失败";
   } finally {
     isSavingDataSource.value = false;
+  }
+}
+
+async function downloadSelectedDataSourceSkill(): Promise<void> {
+  if (!selectedDataSource.value) {
+    return;
+  }
+
+  dataSourceError.value = "";
+  try {
+    const source = selectedDataSource.value;
+    const blob = await downloadDataSourceSkill(source.id);
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${source.id}-SKILL.md`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    dataSourceError.value = error instanceof Error ? error.message : "下载 Skill 失败";
+  }
+}
+
+function openSkillUploadPicker(): void {
+  skillUploadInputRef.value?.click();
+}
+
+async function replaceSelectedDataSourceSkill(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file || !selectedDataSource.value) {
+    input.value = "";
+    return;
+  }
+
+  dataSourceError.value = "";
+  isReplacingSkill.value = true;
+  try {
+    const updated = await replaceDataSourceSkill(selectedDataSource.value.id, file);
+    dataSources.value = dataSources.value.map((source) => (
+      source.id === updated.id ? updated : source
+    ));
+    selectedDataSourceId.value = updated.id;
+    dataSourceError.value = "已替换当前数据源的 Skill 文档。";
+  } catch (error) {
+    dataSourceError.value = error instanceof Error ? error.message : "替换 Skill 失败";
+  } finally {
+    isReplacingSkill.value = false;
+    input.value = "";
+  }
+}
+
+async function deleteSelectedDataSource(): Promise<void> {
+  if (!selectedDataSource.value || isDeletingDataSource.value) {
+    return;
+  }
+
+  const source = selectedDataSource.value;
+  if (!window.confirm(`确认删除数据源「${source.name}」？该操作会删除对应的 SKILL.md 文件。`)) {
+    return;
+  }
+
+  dataSourceError.value = "";
+  isDeletingDataSource.value = true;
+  try {
+    await deleteDataSource(source.id);
+    const remaining = dataSources.value.filter((item) => item.id !== source.id);
+    dataSources.value = remaining;
+    selectedDataSourceId.value = remaining[0]?.id ?? "";
+    dataSourceError.value = "已删除数据源。";
+  } catch (error) {
+    dataSourceError.value = error instanceof Error ? error.message : "删除数据源失败";
+  } finally {
+    isDeletingDataSource.value = false;
   }
 }
 
@@ -443,6 +528,38 @@ function handleKeydown(event: KeyboardEvent): void {
         <div v-if="selectedDataSource" class="datasource-summary">
           <Server :size="16" />
           <span>{{ selectedDataSource.host }}:{{ selectedDataSource.port }}/{{ selectedDataSource.database }}</span>
+        </div>
+
+        <div v-if="selectedDataSource" class="datasource-actions">
+          <button class="secondary-button" type="button" @click="downloadSelectedDataSourceSkill">
+            <Download :size="16" />
+            下载 SKILL.md
+          </button>
+          <button
+            class="secondary-button"
+            type="button"
+            :disabled="isReplacingSkill"
+            @click="openSkillUploadPicker"
+          >
+            <Upload :size="16" />
+            {{ isReplacingSkill ? "替换中" : "上传替换" }}
+          </button>
+          <button
+            class="secondary-button danger"
+            type="button"
+            :disabled="isDeletingDataSource"
+            @click="deleteSelectedDataSource"
+          >
+            <Trash2 :size="16" />
+            {{ isDeletingDataSource ? "删除中" : "删除数据源" }}
+          </button>
+          <input
+            ref="skillUploadInputRef"
+            class="visually-hidden"
+            type="file"
+            accept=".md,text/markdown,text/plain"
+            @change="replaceSelectedDataSourceSkill"
+          />
         </div>
 
         <form v-if="showDataSourceForm" class="datasource-form" @submit.prevent="saveDataSource">

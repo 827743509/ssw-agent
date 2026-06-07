@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import re
+import shutil
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
 
 from ssw.llm import build_llm
@@ -73,6 +75,11 @@ def _skill_dir(datasource_id: str) -> Path:
 
 def _skill_path(datasource_id: str) -> Path:
     return _skill_dir(datasource_id) / "SKILL.md"
+
+
+def _validate_datasource_id(datasource_id: str) -> None:
+    if not re.match(r"^[a-zA-Z0-9_-]+$", datasource_id):
+        raise HTTPException(status_code=404, detail="数据源不存在")
 
 
 def _unique_datasource_id(name: str) -> str:
@@ -401,6 +408,43 @@ def _get_datasource_sync(datasource_id: str) -> DataSourceSummary | None:
     return _read_datasource(skill_file, include_body=True)
 
 
+def _skill_file_exists_sync(datasource_id: str) -> bool:
+    return _skill_path(datasource_id).exists()
+
+
+def _validate_uploaded_skill(text: str) -> None:
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="上传的 Skill 文档不能为空")
+    if not text.startswith("---") or text.find("\n---", 3) == -1:
+        raise HTTPException(status_code=400, detail="Skill 文档必须包含 YAML frontmatter")
+
+    _, metadata = _parse_frontmatter(text)
+    if metadata.get("kind") != "datasource":
+        raise HTTPException(status_code=400, detail="Skill 文档 frontmatter 必须声明 metadata.kind=datasource")
+
+
+def _replace_datasource_skill_sync(datasource_id: str, text: str) -> DataSourceSummary | None:
+    skill_file = _skill_path(datasource_id)
+    if not skill_file.exists():
+        return None
+
+    _validate_uploaded_skill(text)
+    skill_file.write_text(text.rstrip() + "\n", encoding="utf-8")
+    return _read_datasource(skill_file, include_body=True)
+
+
+def _delete_datasource_sync(datasource_id: str) -> bool:
+    skill_dir = _skill_dir(datasource_id).resolve()
+    skills_root = SKILLS_ROOT.resolve()
+    if not skill_dir.is_relative_to(skills_root):
+        return False
+    if not _skill_path(datasource_id).exists():
+        return False
+
+    shutil.rmtree(skill_dir)
+    return True
+
+
 @routerDataBase.get("/info")
 async def user_info():
     return {"type": "mysql"}
@@ -426,10 +470,52 @@ async def create_datasource(datasource: DataSourceCreate) -> DataSourceSummary:
 
 @routerDataBase.get("/datasources/{datasource_id}", response_model=DataSourceSummary)
 async def get_datasource(datasource_id: str) -> DataSourceSummary:
-    if not re.match(r"^[a-zA-Z0-9_-]+$", datasource_id):
-        raise HTTPException(status_code=404, detail="数据源不存在")
+    _validate_datasource_id(datasource_id)
 
     datasource = await asyncio.to_thread(_get_datasource_sync, datasource_id)
+    if not datasource:
+        raise HTTPException(status_code=404, detail="数据源不存在")
+    return datasource
+
+
+@routerDataBase.delete("/datasources/{datasource_id}")
+async def delete_datasource(datasource_id: str) -> dict[str, bool]:
+    _validate_datasource_id(datasource_id)
+    deleted = await asyncio.to_thread(_delete_datasource_sync, datasource_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="数据源不存在")
+    return {"deleted": True}
+
+
+@routerDataBase.get("/datasources/{datasource_id}/skill")
+async def download_datasource_skill(datasource_id: str) -> FileResponse:
+    _validate_datasource_id(datasource_id)
+    if not await asyncio.to_thread(_skill_file_exists_sync, datasource_id):
+        raise HTTPException(status_code=404, detail="数据源不存在")
+
+    return FileResponse(
+        _skill_path(datasource_id),
+        media_type="text/markdown; charset=utf-8",
+        filename=f"{datasource_id}-SKILL.md",
+    )
+
+
+@routerDataBase.post("/datasources/{datasource_id}/skill/replace", response_model=DataSourceSummary)
+async def replace_datasource_skill(
+    datasource_id: str,
+    file: UploadFile = File(...),
+) -> DataSourceSummary:
+    _validate_datasource_id(datasource_id)
+    if file.filename and not file.filename.lower().endswith(".md"):
+        raise HTTPException(status_code=400, detail="只支持上传 .md 文件")
+
+    content = await file.read()
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Skill 文档必须使用 UTF-8 编码") from exc
+
+    datasource = await asyncio.to_thread(_replace_datasource_skill_sync, datasource_id, text)
     if not datasource:
         raise HTTPException(status_code=404, detail="数据源不存在")
     return datasource

@@ -11,6 +11,7 @@ from ssw.subagents.text_to_sql.tool import validate_select_sql
 REPO_ROOT = Path(__file__).resolve().parents[4]
 SKILLS_PATH = "/src/ssw/subagents/text_to_sql/skills"
 
+
 SYSTEM_PROMPT = """
 你是 text-to-SQL Agent，专门把用户的中文或英文自然语言问题转换为 SQL 查询语句。
 

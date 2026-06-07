@@ -75,3 +75,42 @@ export async function generateDataSourceSkill(input: DataSourceConnection): Prom
 
   return (await response.json()) as GeneratedSkill;
 }
+
+export async function downloadDataSourceSkill(datasourceId: string): Promise<Blob> {
+  const response = await fetch(`${apiUrl}/database/datasources/${datasourceId}/skill`);
+
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || `下载 Skill 失败：${response.status}`);
+  }
+
+  return await response.blob();
+}
+
+export async function replaceDataSourceSkill(datasourceId: string, file: File): Promise<DataSourceSummary> {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await fetch(`${apiUrl}/database/datasources/${datasourceId}/skill/replace`, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || `替换 Skill 失败：${response.status}`);
+  }
+
+  return (await response.json()) as DataSourceSummary;
+}
+
+export async function deleteDataSource(datasourceId: string): Promise<void> {
+  const response = await fetch(`${apiUrl}/database/datasources/${datasourceId}`, {
+    method: "DELETE",
+  });
+
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || `删除数据源失败：${response.status}`);
+  }
+}

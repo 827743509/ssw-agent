@@ -4,7 +4,7 @@ from pathlib import Path
 from ssw.llm import build_llm
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
-SKILLS_PATH = "/src/ssw/subagents/default/skills"
+SKILLS_PATH = ".agents/skills/"
 
 SYSTEM_PROMPT = """
 你是一个具备 Skills 能力的智能体。

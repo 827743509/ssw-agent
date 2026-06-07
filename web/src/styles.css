@@ -303,6 +303,16 @@ h2 {
   flex: 1;
 }
 
+.datasource-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.datasource-actions .danger {
+  grid-column: 1 / -1;
+}
+
 .datasource-summary {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);
@@ -335,12 +345,26 @@ h2 {
   opacity: 0.55;
 }
 
+.secondary-button.danger {
+  background: #e24c63;
+}
+
 .inline-error {
   margin: 0;
   color: #e24c63;
   font-size: 0.78rem;
   line-height: 1.45;
   overflow-wrap: anywhere;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
 }
 
 .message-list {

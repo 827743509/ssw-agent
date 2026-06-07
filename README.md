@@ -2,6 +2,12 @@
 
 这是一个基于 LangGraph/Deep Agents 的个人 AI assistant 项目。
 
+## 安装使用
+### pip
+pip install  ssw_agent
+
+### docker
+ 
 ## 本地开发
 
 优先使用 `uv` 同步依赖：
