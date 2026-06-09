@@ -1,10 +1,10 @@
 from deepagents import create_deep_agent, CompiledSubAgent
-from deepagents.backends import FilesystemBackend
+from deepagents.backends import  LocalShellBackend
 from pathlib import Path
 from ssw.llm import build_llm
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
-SKILLS_PATH = ".agents/skills/"
+SKILLS_PATH = "/src/ssw/subagents/default/skills/"
 
 SYSTEM_PROMPT = """
 你是一个具备 Skills 能力的智能体。
@@ -19,7 +19,7 @@ default_agent = create_deep_agent(
     model=build_llm(),
     system_prompt=SYSTEM_PROMPT,
     skills=[SKILLS_PATH],
-    backend=FilesystemBackend(root_dir=REPO_ROOT, virtual_mode=True),
+    backend=LocalShellBackend(root_dir=REPO_ROOT, virtual_mode=False),
     name="default-agent",
 )
 
