@@ -20,7 +20,6 @@ class Settings(BaseSettings):
 
     redis_url: str = Field(default="redis://localhost:6379", alias="REDIS_URL")
 
-    claude_cli_path: str = Field(default=None, alias="CLAUDE_CLI_PATH")
 
 
 def get_settings() -> Settings:
