@@ -2,7 +2,7 @@
 
 第 12 章重构：
 - 由 Celery worker 调度（`app/ingestion/tasks.py`）
-- 每次任务全程驱动一条 `ingestion_tasks` 记录的生命周期：pending → running → success/failed
+- 处理状态通过 `documents.status` 驱动
 - 增量索引按 `chunk_hash` 对齐：删除失效、保留命中、对新增项重新 embedding
 """
 
@@ -10,6 +10,7 @@ import asyncio
 from uuid import UUID
 
 from langchain_core.documents import Document as LangChainDocument
+from redisvl.query.filter import Tag
 
 from ssw.config import EMBEDDING_BATCH_SIZE
 from ssw.core.logging import get_logger
@@ -18,6 +19,7 @@ from ssw.db.session import AsyncSessionLocal
 from ssw.ingestion import embedder, parser, splitter
 from ssw.repository.chunk_repo import DocumentChunkRepository
 from ssw.repository.document_repo import DocumentRepository
+from ssw.service.semantic_cache_service import get_semantic_cache, _SCOPE_FIELD
 from ssw.storage.file_service import get_file_service
 
 logger = get_logger(__name__)
@@ -36,20 +38,14 @@ async def _set_status(
         await session.commit()
 
 
-async def _embed_with_progress(
-    texts: list[str], task_id: UUID
-) -> list[list[float]]:
-    """按 EMBEDDING_BATCH_SIZE 分批 embedding，逐批写入任务进度。
-
-    LangChain `OpenAIEmbeddings.aembed_documents` 内部也会分批，但回调粒度藏在
-    SDK 里；这里手动分批是为了让 `progress_done` 跟着每个批次走，前端轮询有连续反馈。
-    """
+async def _embed_documents(texts: list[str]) -> list[list[float]]:
+    """按 EMBEDDING_BATCH_SIZE 分批生成向量。"""
 
 
     if not texts:
         return []
-    embeddings_client = embedder.get_embeddings()
     batch_size = max(1, EMBEDDING_BATCH_SIZE)
+    embeddings_client = embedder.get_embeddings(batch_size)
     results: list[list[float]] = []
     for start in range(0, len(texts), batch_size):
         batch = texts[start : start + batch_size]
@@ -59,9 +55,9 @@ async def _embed_with_progress(
     return results
 
 
-async def _run_ingest(document_id: UUID, task_id: UUID) -> None:
+async def _run_ingest(document_id: UUID) -> None:
     """首次入库：全量解析 → 切分 → embedding → 写库。"""
-    logger.info("ingest start: document_id=%s task_id=%s", document_id, task_id)
+    logger.info("ingest start: document_id=%s", document_id)
 
 
     try:
@@ -83,9 +79,7 @@ async def _run_ingest(document_id: UUID, task_id: UUID) -> None:
             raise ValueError("切分后没有任何 chunk，请检查文档内容")
 
 
-        embeddings = await _embed_with_progress(
-            [c.page_content for c in chunks], task_id
-        )
+        embeddings = await _embed_documents([c.page_content for c in chunks])
 
         async with AsyncSessionLocal() as session:
             chunk_repo = DocumentChunkRepository(session)
@@ -96,6 +90,9 @@ async def _run_ingest(document_id: UUID, task_id: UUID) -> None:
 
         await _set_status(document_id, DocumentStatus.READY, error_message=None)
 
+        #删除redis向量语义缓存
+        await get_semantic_cache().delete(filter_expression=Tag(_SCOPE_FIELD)==str(document_id))
+
         logger.info("ingest done: document_id=%s chunks=%d", document_id, len(chunks))
 
     except Exception as exc:
@@ -105,15 +102,15 @@ async def _run_ingest(document_id: UUID, task_id: UUID) -> None:
 
 
 
-async def _run_reindex(document_id: UUID, task_id: UUID) -> None:
+async def _run_reindex(document_id: UUID) -> None:
     """增量重建：按 chunk_hash 对齐，仅对变化部分重新 embedding。
 
     与 _run_ingest 的区别：
     - 命中的 chunk 不重新计算 embedding，仅更新 chunk_index / metadata
-    - 新增 chunk 才走 embedding，progress_total 也只统计新增数量
+    - 新增 chunk 才走 embedding
     - 全删全插作为 hash 冲突场景的兜底
     """
-    logger.info("reindex start: document_id=%s task_id=%s", document_id, task_id)
+    logger.info("reindex start: document_id=%s", document_id)
 
 
     try:
@@ -148,13 +145,9 @@ async def _run_reindex(document_id: UUID, task_id: UUID) -> None:
                 "reindex fallback to full rebuild due to duplicate chunk_hash: %s",
                 document_id,
             )
-            await _run_full_rebuild(
-                document_id, task_id, new_chunks
-            )
+            await _run_full_rebuild(document_id, new_chunks)
         else:
-            await _run_incremental(
-                document_id, task_id, old_chunks, new_chunks
-            )
+            await _run_incremental(document_id, old_chunks, new_chunks)
 
         # 内容已成功重建：版本号 +1
         async with AsyncSessionLocal() as session:
@@ -165,7 +158,7 @@ async def _run_reindex(document_id: UUID, task_id: UUID) -> None:
             await session.commit()
 
         await _set_status(document_id, DocumentStatus.READY, error_message=None)
-
+        await get_semantic_cache().delete(filter_expression=Tag(_SCOPE_FIELD) == str(document_id))
         logger.info(
             "reindex done: document_id=%s new_chunks=%d",
             document_id,
@@ -181,7 +174,6 @@ async def _run_reindex(document_id: UUID, task_id: UUID) -> None:
 
 async def _run_incremental(
     document_id: UUID,
-    task_id: UUID,
     old_chunks: list[DocumentChunk],
     new_chunks: list[LangChainDocument],
 ) -> None:
@@ -209,9 +201,7 @@ async def _run_incremental(
             to_update.append((existing, nc))
 
 
-    new_embeddings = await _embed_with_progress(
-        [c.page_content for c in to_insert], task_id
-    )
+    new_embeddings = await _embed_documents([c.page_content for c in to_insert])
 
     async with AsyncSessionLocal() as session:
         chunk_repo = DocumentChunkRepository(session)
@@ -221,7 +211,6 @@ async def _run_incremental(
         for old, nc in to_update:
             old.chunk_index = nc.metadata["chunk_index"]
             old.page_no = nc.metadata.get("page_no")
-            old.section_path = nc.metadata.get("section_path")
             old.extra_metadata = nc.metadata
 
         await chunk_repo.bulk_add(
@@ -243,14 +232,11 @@ async def _run_incremental(
 
 async def _run_full_rebuild(
     document_id: UUID,
-    task_id: UUID,
     new_chunks: list[LangChainDocument],
 ) -> None:
     """hash 冲突场景的兜底：清空旧 chunks，全量 embedding 后写入。"""
 
-    embeddings = await _embed_with_progress(
-        [c.page_content for c in new_chunks], task_id
-    )
+    embeddings = await _embed_documents([c.page_content for c in new_chunks])
 
     async with AsyncSessionLocal() as session:
         chunk_repo = DocumentChunkRepository(session)
@@ -282,7 +268,6 @@ def _make_chunk(
         content=chunk.page_content,
         embedding=embedding,
         page_no=chunk.metadata.get("page_no"),
-        section_path=chunk.metadata.get("section_path"),
         chunk_index=chunk.metadata["chunk_index"],
         chunk_hash=chunk.metadata["chunk_hash"],
         extra_metadata=chunk.metadata,
@@ -291,10 +276,14 @@ def _make_chunk(
 
 # ---------- 同步入口：供 Celery worker 调用 ----------
 
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
 
-def run_ingest_sync(document_id: UUID, task_id: UUID) -> None:
-    asyncio.run(_run_ingest(document_id, task_id))
+
+def run_ingest_sync(document_id: UUID) -> None:
+    loop.run_until_complete(_run_ingest(document_id))
 
 
-def run_reindex_sync(document_id: UUID, task_id: UUID) -> None:
-    asyncio.run(_run_reindex(document_id, task_id))
+
+def run_reindex_sync(document_id: UUID) -> None:
+    loop.run_until_complete(_run_reindex(document_id))

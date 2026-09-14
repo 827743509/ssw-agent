@@ -1,0 +1,79 @@
+"""向量检索器：query → embedding → pgvector Top-K。
+
+第 4 章只做向量单路召回；第 6 章起作为 HybridRetriever 的一路输入，
+另一路是 KeywordRetriever，最终由 RRF 融合。
+第 11 章起 search 支持 permission_tags 透传到 chunk_repo SQL。
+"""
+
+from dataclasses import dataclass, field
+from uuid import UUID
+
+from langsmith import traceable
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ssw.config import EMBEDDING_BATCH_SIZE
+from ssw.ingestion.embedder import get_embeddings
+from ssw.repository.chunk_repo import DocumentChunkRepository
+
+
+@dataclass(frozen=True)
+class RetrievedChunk:
+    """检索结果中单个 chunk 的展示视图。
+
+    score 是统一后的"越大越相似"分数：
+    - 向量路：cosine similarity ∈ [0, 1]
+    - 关键词路：ts_rank（无固定上界，相对比较有意义）
+    - 混合路：RRF 融合分（参考 rrf_score 字段）
+
+    sources / vector_rank / keyword_rank / rrf_score 是第 6 章的调试字段，
+    用于让前端面板看清楚"这条引用从哪条路召回、各自第几名"。
+    单路检索时只有该路的 rank 有值；混合检索后字段会同时填上。
+    """
+
+    chunk_id: UUID
+    document_id: UUID
+    document_name: str
+    content: str
+    page_no: int | None
+    score: float
+    sources: tuple[str, ...] = field(default_factory=tuple)
+    vector_rank: int | None = None
+    vector_score: float | None = None  # 原始 cosine similarity（向量路命中时填充）
+    keyword_rank: int | None = None
+    keyword_score: float | None = None  # 原始 ts_rank（关键词路命中时填充）
+    rrf_score: float | None = None
+    # reranker query-chunk 成对打分的相关度，越大越相关
+    # qwen3-rerank 输出 relevance_score ∈ [0, 1]
+    rerank_score: float | None = None
+
+
+class VectorRetriever:
+    def __init__(self, session: AsyncSession) -> None:
+        self.chunk_repo = DocumentChunkRepository(session)
+
+    @traceable(name="VectorRetriever.search", run_type="retriever")
+    async def search(
+        self,
+        query: str,
+        top_k: int
+    ) -> list[RetrievedChunk]:
+        embedding = await get_embeddings(EMBEDDING_BATCH_SIZE).aembed_query(query)
+        rows = await self.chunk_repo.vector_search(
+            embedding, top_k
+        )
+        return [
+            RetrievedChunk(
+                chunk_id=chunk.id,
+                document_id=chunk.document_id,
+                document_name=chunk.document.name,
+                content=chunk.content,
+                page_no=chunk.page_no,
+                # pgvector cosine_distance ∈ [0, 2]；标准化为 similarity
+                # 同方向归一化向量下，distance ∈ [0, 1]，similarity ∈ [0, 1]
+                score=1.0 - distance,
+                sources=("vector",),
+                vector_rank=rank,
+                vector_score=1.0 - distance,
+            )
+            for rank, (chunk, distance) in enumerate(rows, start=1)
+        ]

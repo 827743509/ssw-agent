@@ -10,17 +10,17 @@ from ssw.celery_app import celery_app
 from ssw.ingestion.pipeline import run_ingest_sync, run_reindex_sync
 
 
-@celery_app.task(name="ingest_document", bind=True)
-def ingest_document_task(self, document_id: str, task_id: str) -> dict[str, str]:
+@celery_app.task(name="ingest_document")
+def ingest_document_task(document_id: str) -> dict[str, str]:
     """首次入库任务。"""
-    run_ingest_sync(UUID(document_id), UUID(task_id))
+    run_ingest_sync(UUID(document_id))
+    
+    return {"document_id": document_id}
 
-    return {"document_id":document_id, "task_id":task_id}
 
-
-@celery_app.task(name="reindex_document", bind=True)
-def reindex_document_task(self, document_id: str, task_id: str) -> dict[str, str]:
+@celery_app.task(name="reindex_document")
+def reindex_document_task(document_id: str) -> dict[str, str]:
     """增量重建任务。"""
-    run_reindex_sync(UUID(document_id), UUID(task_id))
+    run_reindex_sync(UUID(document_id))
 
-    return {"document_id": document_id, "task_id": task_id}
+    return {"document_id": document_id}

@@ -3,6 +3,8 @@
 业务代码统一通过 FileService 操作文件，不直接调 OssClient，便于以后切换存储后端
 （本地磁盘、S3 等）时只改这一层。
 """
+from io import BytesIO
+
 from ssw.core.logging import get_logger
 from ssw.storage.oss_client import OssClient, get_oss_client
 
@@ -24,7 +26,7 @@ class FileService:
 
     async def upload(self, *, content: bytes, file_hash: str, suffix: str, mime_type: str) -> str:
         key = self.build_object_key(file_hash, suffix)
-        await self._oss.put_object(key=key, body=content, content_type=mime_type)
+        await self._oss.put_object(key=key, body=BytesIO(content),length=len(content), content_type=mime_type)
         return key
 
     async def download(self, object_key: str) -> bytes:

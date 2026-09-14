@@ -1,0 +1,61 @@
+"""问答工作流状态定义。
+
+用 TypedDict 而非 Pydantic：节点函数返回 partial dict、由调用方合并到 state，
+比 Pydantic 模型逐字段 copy_update 更轻量，且不需要为每次部分更新做校验。
+"""
+
+from typing import Literal, TypedDict, Annotated
+from uuid import UUID
+
+from langchain_core.messages import BaseMessage
+from langgraph.graph import add_messages
+
+from ssw.subagents.rag.retrieved.vector_retriever import RetrievedChunk
+
+# 4 选 1 路由策略：original 不改写、rewrite 改写、hyde 假设答案、multi_query 多子查询
+QueryRoute = Literal["original", "rewrite", "hyde", "multi_query"]
+
+
+class RAGState(TypedDict, total=False):
+
+    messages: Annotated[list[BaseMessage], add_messages]
+
+    # 输入
+    query: str
+    query_embedding: list[float] | None
+
+    # route_query 产出
+    # route：实际采用的策略；query：覆盖 normalize_query 的透传 query（rewrite/hyde 路径下变成改写文本）
+    route: QueryRoute
+    rewritten_query: str | None
+    hyde_answer: str | None
+    cache_hit: bool | None
+    multi_queries: list[str] | None
+
+    # retrieve 产出
+    retrieved_chunks: list[RetrievedChunk]
+    # 是否触发拒答（检索不足）。True 时跳过 generate
+    refused: bool
+
+    # Agentic RAG 循环：plan_retrieval / observe_context 产出
+    # agent_steps 每一项形如 {round, action, reason, route, query, retrieved_count, top_score, sufficient}
+    # 由 plan_retrieval 追加"决策"字段、observe_context 回填"观察"字段，避免分两条记录
+    agent_steps: list[dict]
+    retrieval_round: int
+    # observe_context 判定本轮候选是否足够；True 时图走出循环进入 rerank
+    context_sufficient: bool
+
+    # rerank 后基于 Top1 score 的拒答闸门
+    # False 时图走向 refuse 节点；True 时图走向 END
+    context_is_enough: bool
+
+    # generate 产出
+    answer: str
+
+    # chat_service 落库后回写
+    user_message_id: UUID
+    assistant_message_id: UUID
+
+    # LangSmith trace_id：未启用观测 / 取不到 run tree 时为 None
+    # 仅由 service 层 stream_answer 进入 @traceable 上下文后写入，节点不感知
+    trace_id: str | None

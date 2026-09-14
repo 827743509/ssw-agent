@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import os
 import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -15,6 +17,8 @@ from ssw.api.documents import documents_router
 from ssw.config import AGENT_NAME, REDIS_URL, CORS_ORIGINS
 from ssw.core.AuthenticationMiddleware import AuthenticationMiddleware
 from ssw.core.MongodbClient import mongo_client, async_mongo_client
+from ssw.core.error_handlers import register_error_handlers
+from ssw.core.logging import get_logger, configure_logging
 
 src_dir = Path(__file__).resolve().parents[1]
 if str(src_dir) not in sys.path:
@@ -30,7 +34,7 @@ from ssw.dependency import get_mcp_repository, get_mcp_service
 
 scheduler = AsyncIOScheduler()
 
-
+logger = get_logger(__name__)
 async def scan_agent_conversations():
     print("开始扫描超时会话")
     one_minute_ago = datetime.now(timezone.utc) - timedelta(minutes=1)
@@ -96,30 +100,40 @@ async def scan_agent_conversations():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+
     scheduler.add_job(scan_agent_conversations, "interval", minutes=1)
     scheduler.start()
     try:
+        logger.info("开始加载mongodb checkpoint")
         checkpointer = MongoDBSaver(mongo_client, db_name="langgraph")
         app.state.checkpointer = checkpointer
-        mcp_service = get_mcp_service(get_mcp_repository())
-
+        logger.info("开始加载redis短期记忆")
         with RedisStore.from_conn_string(REDIS_URL) as redis_store:
             redis_store.setup()
             app.state.store = redis_store
+            mcp_service = get_mcp_service(get_mcp_repository())
             try:
-                mcp_tools = await mcp_service.load_current_tools()
-            except Exception as exc:
-                print(f"MCP 工具加载失败，当前将不启用 MCP 工具：{exc}", flush=True)
+                logger.info("开始加载mcp_service")
+                async with asyncio.timeout(60):  # 60 秒超时
+                    mcp_tools = await mcp_service.load_current_tools()
+            except TimeoutError:
+                logger.warning("加载 MCP 工具超时")
                 mcp_tools = []
-            app.state.agent = create_chat_agent(checkpointer, redis_store, mcp_tools)
+            except Exception as exc:
+                logger.info(f"MCP 工具加载失败，当前将不启用 MCP 工具：{exc}")
+                mcp_tools = []
+            logger.info("创建主agent")
+            app.state.agent = await create_chat_agent(checkpointer, redis_store, mcp_tools)
+            logger.info("主agent创建完毕")
+            logger.info("LANGSMITH_ENDPOINT:%s",os.getenv("LANGSMITH_ENDPOINT"))
             yield
     finally:
         scheduler.shutdown()
 
 
-
+configure_logging()
 app = FastAPI(lifespan=lifespan)
-
+register_error_handlers(app)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,

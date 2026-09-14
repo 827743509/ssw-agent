@@ -1,16 +1,20 @@
 from __future__ import annotations
+
 from pathlib import Path
 from typing import Any
+
+from deepagents import (
+    create_deep_agent, CompiledSubAgent,
+)
 from deepagents.backends import LocalShellBackend, CompositeBackend, StoreBackend
 from langchain.agents.middleware import ToolCallLimitMiddleware
-from ssw.llm import build_llm
-from deepagents import (
-    create_deep_agent,
-)
+
 from ssw.config import SSW_WORKSPACE, AGENT_NAME
+from ssw.llm import build_llm
 from ssw.middleware.DynamicSkillMiddleware import DynamicSkillsMiddleware
 from ssw.middleware.DynamicToolMiddleware import DynamicToolMiddleware
 from ssw.middleware.permission_approval_middleware import PermissionApprovalMiddleware
+from ssw.subagents.rag.graph import _build_rag_graph
 from ssw.subagents.text_to_sql import text_to_sql_subagent
 
 SYSTEM_PROMPT = """
@@ -33,15 +37,27 @@ workspace = Path(SSW_WORKSPACE).resolve()
 SKILLS_PATH = workspace / "skills/main"
 SKILLS_PATH.mkdir(parents=True, exist_ok=True)
 
-subagents = [
-    text_to_sql_subagent,
-]
+
 
 llm =build_llm()
 
 
 
-def create_chat_agent(checkpoint: Any,redis_store, tools: list[Any] | None = None):
+async def create_chat_agent(checkpoint: Any,redis_store, tools: list[Any] | None = None):
+    rag_graph = await _build_rag_graph()
+    rag_subagent = CompiledSubAgent(
+        name="rag_graph",
+        description=
+    "知识库 RAG 检索子 Agent。"
+    "用于查询企业内部知识库，包括业务知识、产品资料、技术文档、接口文档、操作手册、"
+    "规范制度、常见问题 FAQ 等内容。"
+    "当用户问题可能需要依赖上述知识库信息时调用。"
+    "返回基于知识库生成的回答，并附带本次检索命中的原始知识内容作为参考上下文。",
+        runnable=rag_graph,
+    )
+    subagents = [
+        text_to_sql_subagent,rag_subagent
+    ]
     return  create_deep_agent(
     model=llm,
     tools=tools or [],

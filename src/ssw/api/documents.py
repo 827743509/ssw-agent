@@ -14,9 +14,8 @@ from starlette.requests import Request
 
 from ssw.db.models import Document, DocumentStatus
 from ssw.dependency import DocumentServiceDep
-from ssw.schemas.documents import DocumentRead, IngestionTaskRead, DocumentStatusValue, DocumentListResponse, \
+from ssw.schemas.documents import DocumentRead, DocumentStatusValue, DocumentListResponse, \
     DocumentChunkListResponse, DocumentChunkRead, DocumentChunkStats, DocumentChunkDetail
-from ssw.service.document_service import DocumentService
 
 documents_router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -37,7 +36,7 @@ async def upload_document(
         file,
         created_by=http_request.state.user_id
     )
-    return await _to_document_read(document, service)
+    return _to_document_read(document)
 
 
 @documents_router.get("", response_model=DocumentListResponse, operation_id="listDocuments")
@@ -53,7 +52,7 @@ async def list_documents(
         status=DocumentStatus(status) if status else None,
     )
     return DocumentListResponse(
-        items=[await _to_document_read(d, service) for d in items],
+        items=[_to_document_read(d) for d in items],
         total=total,
         page=page,
         page_size=page_size,
@@ -66,7 +65,7 @@ async def get_document(
     service: DocumentServiceDep,
 ) -> DocumentRead:
     document = await service.get(document_id)
-    return await _to_document_read(document, service)
+    return _to_document_read(document)
 
 
 @documents_router.delete("/{document_id}", status_code=204, operation_id="deleteDocument")
@@ -89,7 +88,7 @@ async def retry_document(
     service: DocumentServiceDep,
 ) -> DocumentRead:
     document = await service.retry(document_id)
-    return await _to_document_read(document, service)
+    return _to_document_read(document)
 
 
 @documents_router.post(
@@ -106,7 +105,7 @@ async def reindex_document(
 ) -> DocumentRead:
     """上传新版本文件，触发按 chunk_hash 对齐的增量重建。"""
     document = await service.reindex(document_id, file)
-    return await _to_document_read(document, service)
+    return _to_document_read(document)
 
 
 
@@ -127,7 +126,7 @@ async def download_document(
 
 
     document = await service.get(document_id)
-    content = await service.file_service.download(document.cos_object_key)
+    content = await service.file_service.download(document.oss_object_key)
 
     force_attachment = download == 1 or document.mime_type == _DOCX_MIME
     disposition = "attachment" if force_attachment else "inline"
@@ -191,16 +190,5 @@ async def get_document_chunk(
     return DocumentChunkDetail.from_orm_chunk(chunk)
 
 
-async def _to_document_read(
-    document: Document, service: DocumentService
-) -> DocumentRead:
-    """组装 DocumentRead：附带 latest_task，前端轮询时直接展示任务进度卡片。"""
-    latest = await service.get_latest_task(document.id)
-    return DocumentRead.model_validate(
-        {
-            **{c.name: getattr(document, c.name) for c in document.__table__.columns},
-            "latest_task": IngestionTaskRead.model_validate(latest)
-            if latest is not None
-            else None,
-        }
-    )
+def _to_document_read(document: Document) -> DocumentRead:
+    return DocumentRead.model_validate(document)

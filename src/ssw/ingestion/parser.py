@@ -1,7 +1,7 @@
 """文档解析：把原始字节流交给 Docling，输出 LangChain Document 列表。
 
 Docling 是同步阻塞调用，统一用 asyncio.to_thread 包装。
-本章实现"全文为一篇 Document"的最简版本：page_no/section_path 留 None，
+本章实现"全文为一篇 Document"的最简版本：page_no 留 None，
 后续章节按需扩展按页拆分与标题层级抽取。
 """
 

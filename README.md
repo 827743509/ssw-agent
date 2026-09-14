@@ -15,8 +15,10 @@ docker compose up -d --build
 - Agent Protocol：`http://localhost:2024`
 - Redis：`localhost:6379`
 - MongoDB：`localhost:27017`
+- MinIO API：`http://localhost:9000`
+- MinIO 管理后台：`http://localhost:9002`
 
-首次启动时，`mongo-init` 会自动初始化 MongoDB 副本集。前端通过 Nginx 的 `/api` 路径代理后端，并已关闭 SSE 响应缓冲。
+Compose 使用同一个后端镜像分别运行 FastAPI、Celery worker 和 `langgraph dev` Agent Protocol。首次启动时，`mongo-init` 会自动初始化 MongoDB 副本集。前端通过 Nginx 的 `/api` 路径代理后端，并已关闭 SSE 响应缓冲。
 
 这是一个基于 LangGraph/Deep Agents 的个人 AI assistant 项目。
 
@@ -34,13 +36,15 @@ pip install  ssw_agent
 uv sync
 ```
 
-启动 Web 后端：
+分别启动 Agent Protocol、FastAPI 和 Celery worker（需要三个终端）：
 
 ```powershell
-python -m ssw.start_web
+uv run langgraph dev --host 127.0.0.1 --port 2024 --no-browser
+uv run uvicorn ssw.server:app --host 127.0.0.1 --port 8000
+uv run celery -A ssw.celery_app:celery_app worker --loglevel=INFO --pool=solo
 ```
 
-`ssw.start_web` 会先启动 `langgraph dev` 作为异步子 Agent 服务，默认监听 `http://127.0.0.1:2024`；随后启动 FastAPI，默认监听 `http://127.0.0.1:8000`。前端和业务接口统一访问 FastAPI，Chat 接口在当前 FastAPI 进程内直接调用 `agent.astream`。
+Agent Protocol 默认监听 `http://127.0.0.1:2024`，FastAPI 默认监听 `http://127.0.0.1:8000`。前端和业务接口统一访问 FastAPI，Chat 接口在当前 FastAPI 进程内直接调用 `agent.astream`；耗时的文档入库任务由 Celery worker 消费。
 
 ## Chat API
 

@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy import and_, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.sql.elements import ColumnElement
@@ -106,9 +106,7 @@ class DocumentChunkRepository:
     async def keyword_search(
         self,
         query: str,
-        top_k: int,
-        *,
-        permission_tags: list[str] | None = None,
+        top_k: int
     ) -> list[tuple[DocumentChunk, float]]:
         """中文全文检索 Top-K：plainto_tsquery + ts_rank。
 
@@ -124,10 +122,6 @@ class DocumentChunkRepository:
             Document.status == "ready",
             DocumentChunk.content_tsv.op("@@")(tsquery),
         ]
-        # perm_where = _permission_where(permission_tags)
-        # if perm_where is not None:
-        #     conditions.append(perm_where)
-
         stmt = (
             select(DocumentChunk, rank_expr.label("rank"))
             .join(Document, Document.id == DocumentChunk.document_id)
@@ -142,9 +136,7 @@ class DocumentChunkRepository:
     async def vector_search(
         self,
         query_embedding: list[float],
-        top_k: int,
-        *,
-        permission_tags: list[str] | None = None,
+        top_k: int
     ) -> list[tuple[DocumentChunk, float]]:
         """按 cosine 距离做 Top-K 向量检索。
 
@@ -156,10 +148,6 @@ class DocumentChunkRepository:
         """
         distance = DocumentChunk.embedding.cosine_distance(query_embedding)
         conditions: list[ColumnElement[bool]] = [Document.status == "ready"]
-        # perm_where = _permission_where(permission_tags)
-        # if perm_where is not None:
-        #     conditions.append(perm_where)
-
         stmt = (
             select(DocumentChunk, distance.label("distance"))
             .join(Document, Document.id == DocumentChunk.document_id)

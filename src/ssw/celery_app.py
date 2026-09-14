@@ -1,7 +1,7 @@
 """Celery 应用实例。
 
-启动 worker：`uv run celery -A app.celery_app worker -l info`
-任务定义见 `app.ingestion.tasks`，通过 `include` 让 worker 启动时自动发现。
+启动 worker：`uv run celery -A ssw.celery_app:celery_app worker -l info`
+任务定义见 `ssw.ingestion.tasks`，通过 `include` 让 worker 启动时自动发现。
 """
 
 from celery import Celery
@@ -12,11 +12,10 @@ celery_app = Celery(
     "rag_knowledge_base",
     broker=CELERY_BROKER_URL,
     backend=CELERY_RESULT_BACKEND,
-    include=["app.ingestion.tasks"],
+    include=["ssw.ingestion.tasks"],
 )
 
-# 文档入库是「长任务、最终一致」语义：拿到任务先 ack，业务侧用 ingestion_tasks
-# 表自己跟踪状态，不靠 broker 重传保证不丢
+# 文档入库状态由 documents.status 跟踪。
 celery_app.conf.update(
     task_acks_late=False,
     worker_prefetch_multiplier=1,

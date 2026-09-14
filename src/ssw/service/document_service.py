@@ -6,16 +6,17 @@ from uuid import UUID
 
 from fastapi import UploadFile
 from pydantic import ValidationError
+from redisvl.query.filter import Tag
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ssw.config import UPLOAD_MAX_SIZE_MB
 from ssw.core.exceptions import NotFoundError
 from ssw.core.logging import get_logger
-from ssw.db.models import DocumentStatus, DocumentChunk, Document, IngestionTaskType, IngestionTask
+from ssw.db.models import DocumentStatus, DocumentChunk, Document
 from ssw.ingestion.tasks import ingest_document_task, reindex_document_task
 from ssw.repository.chunk_repo import DocumentChunkRepository, ChunkStats
 from ssw.repository.document_repo import DocumentRepository
-from ssw.repository.ingestion_task_repo import IngestionTaskRepository
+from ssw.service.semantic_cache_service import get_semantic_cache, _SCOPE_FIELD
 from ssw.storage.file_service import get_file_service, FileService
 
 logger = get_logger(__name__)
@@ -73,11 +74,10 @@ def _resolve_mime_and_suffix(file: UploadFile) -> tuple[str, str]:
     )
 
 class DocumentService:
-    def __init__(self, session: AsyncSession, repo: DocumentRepository,chunk_repo:DocumentChunkRepository,task_repo:IngestionTaskRepository,file_service: FileService | None = None) -> None:
+    def __init__(self, session: AsyncSession, repo: DocumentRepository,chunk_repo:DocumentChunkRepository,file_service: FileService | None = None) -> None:
         self.session=session
         self.repo = repo
         self.chunk_repo = chunk_repo
-        self.task_repo=task_repo
         self.file_service = file_service or get_file_service()
 
     async def upload(
@@ -120,12 +120,11 @@ class DocumentService:
             created_by=created_by,
         )
         await self.repo.add(document)
-        task = await self.task_repo.create(document.id, IngestionTaskType.INGEST)
         await self.session.commit()
         await self.session.refresh(document)
 
-        # commit 之后 Celery worker 用独立 session 才能查到刚落库的 document / task
-        ingest_document_task.delay(str(document.id), str(task.id))
+        # commit 之后 Celery worker 用独立 session 才能查到刚落库的 document
+        ingest_document_task.delay(str(document.id))
 
         return document
 
@@ -162,12 +161,13 @@ class DocumentService:
         if doc.status not in _DELETABLE_STATUSES:
             raise ValidationError("文档处理中，请等待完成或失败后再删除")
 
-        object_key = doc.cos_object_key
+        object_key = doc.oss_object_key
         await self.repo.delete(doc)
         await self.session.commit()
 
         await self.file_service.delete(object_key)
         logger.info("document deleted: id=%s", document_id)
+        await get_semantic_cache().delete(filter_expression=Tag(_SCOPE_FIELD) == str(document_id))
 
     async def retry(self, document_id: UUID) -> Document:
         """从 failed 重新触发 ingest。"""
@@ -181,11 +181,10 @@ class DocumentService:
         await self.chunk_repo.delete_by_document(document_id)
         doc.status = DocumentStatus.UPLOADING
         doc.error_message = None
-        task = await self.task_repo.create(doc.id, IngestionTaskType.INGEST)
         await self.session.commit()
         await self.session.refresh(doc)
 
-        ingest_document_task.delay(str(doc.id), str(task.id))
+        ingest_document_task.delay(str(doc.id))
         logger.info("document retry scheduled: id=%s", document_id)
         return doc
 
@@ -237,7 +236,7 @@ class DocumentService:
 
         doc.file_hash = new_hash
         doc.size = len(content)
-        doc.cos_object_key = new_object_key
+        doc.oss_object_key = new_object_key
         doc.cos_bucket = self.file_service.bucket
         doc.cos_region = self.file_service.region
         doc.status = DocumentStatus.PARSING
@@ -245,16 +244,12 @@ class DocumentService:
         if file.filename:
             doc.name = file.filename
 
-        task = await self.task_repo.create(doc.id, IngestionTaskType.REINDEX)
         await self.session.commit()
         await self.session.refresh(doc)
 
-        reindex_document_task.delay(str(doc.id), str(task.id))
+        reindex_document_task.delay(str(doc.id))
         logger.info("document reindex scheduled: id=%s", document_id)
         return doc
-
-    async def get_latest_task(self, document_id: UUID) -> IngestionTask | None:
-        return await self.task_repo.get_latest_by_document(document_id)
 
 
 

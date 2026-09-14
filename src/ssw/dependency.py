@@ -13,7 +13,6 @@ from ssw.db.session import get_session
 from ssw.repository.chat import ChatRepository
 from ssw.repository.chunk_repo import DocumentChunkRepository
 from ssw.repository.document_repo import DocumentRepository
-from ssw.repository.ingestion_task_repo import IngestionTaskRepository
 from ssw.repository.mcp import McpRepository
 from ssw.repository.skills import SkillRepository
 from ssw.service.chat import ChatService
@@ -67,17 +66,19 @@ def get_skill_service(repository: Annotated[SkillRepository, Depends(get_skill_r
     return SkillService(repository)
 
 
-def get_document_service(session:DBSessionDep,repo: Annotated[DocumentRepository, Depends(get_document_repository)],chunk_repo:Annotated[DocumentChunkRepository, Depends(get_document_chunk_repository)],task_repo:Annotated[IngestionTaskRepository, Depends(get_ingestion_task_repository)],file_service:FileServiceDep) -> DocumentService:
-    return DocumentService(session,repo,chunk_repo,task_repo,file_service)
-
 def get_document_repository(session: DbSession) -> DocumentRepository:
     return DocumentRepository(session)
 
 def get_document_chunk_repository(session: DbSession) -> DocumentChunkRepository:
     return DocumentChunkRepository(session)
 
-def get_ingestion_task_repository(session: DbSession) -> IngestionTaskRepository:
-    return IngestionTaskRepository(session)
+def get_document_service(
+    session: DbSession,
+    repo: Annotated[DocumentRepository, Depends(get_document_repository)],
+    chunk_repo: Annotated[DocumentChunkRepository, Depends(get_document_chunk_repository)],
+    file_service: Annotated[FileService, Depends(get_file_service)],
+) -> DocumentService:
+    return DocumentService(session, repo, chunk_repo, file_service)
 
 DocumentServiceDep = Annotated[DocumentService, Depends(get_document_service)]
 

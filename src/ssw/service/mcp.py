@@ -6,7 +6,6 @@ import re
 from typing import Any
 
 from fastapi import HTTPException
-
 from ssw.agent import create_chat_agent
 from ssw.mcp_tools import load_mcp_server_tools
 from ssw.repository.mcp import McpRepository
@@ -49,7 +48,7 @@ class McpService:
                 agent = None
                 if should_rebuild_agent:
                     tools = await self._load_tools(config)
-                    agent = create_chat_agent(checkpointer, store, tools)
+                    agent = await create_chat_agent(checkpointer, store, tools)
                     self._tool_count = len(tools)
                 saved_config = await asyncio.to_thread(self.repository.save, config)
             except HTTPException:
@@ -76,6 +75,8 @@ class McpService:
         tool_sources: dict[str, str] = {}
 
         for server_name, server in config.mcp_servers.items():
+            if not server.is_enabled:
+                continue
             connection = self._resolve_environment_values(server.to_connection())
             try:
                 server_tools = await load_mcp_server_tools(server_name, connection)

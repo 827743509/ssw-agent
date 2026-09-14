@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {
   Database,
+  Files,
   History,
   LoaderCircle,
   MessageSquarePlus,
@@ -10,7 +11,7 @@ import {
 } from "@lucide/vue";
 import type { ChatSummary, ThreadId } from "../services/langgraph";
 
-export type SidebarView = "chat" | "datasource-list" | "datasource-create";
+export type SidebarView = "chat" | "documents" | "datasource-list" | "datasource-create";
 
 defineProps<{
   activeView: SidebarView;
@@ -80,6 +81,16 @@ function handleHistoryScroll(event: Event): void {
       >
         <MessageSquarePlus :size="19" />
         <span>新聊天</span>
+      </button>
+
+      <button
+        class="menu-item"
+        :class="{ active: activeView === 'documents' }"
+        type="button"
+        @click="emit('navigate', 'documents')"
+      >
+        <Files :size="19" />
+        <span>RAG 文档管理</span>
       </button>
 
       <button

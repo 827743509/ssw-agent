@@ -17,6 +17,7 @@ import {
 import AppSidebar, { type SidebarView } from "./components/AppSidebar.vue";
 import AsyncTaskStatusList from "./components/AsyncTaskStatusList.vue";
 import DataSourceManager from "./components/DataSourceManager.vue";
+import DocumentManager from "./components/DocumentManager.vue";
 import McpConfigDialog from "./components/McpConfigDialog.vue";
 import { useAsyncTaskPolling } from "./composables/useAsyncTaskPolling";
 import {
@@ -759,6 +760,10 @@ function handleKeydown(event: KeyboardEvent): void {
         </div>
       </form>
     </section>
+    <DocumentManager
+      v-else-if="activeView === 'documents'"
+      class="manager-workspace"
+    />
     <DataSourceManager
       v-else
       :view="datasourceView"

@@ -1,16 +1,16 @@
 from datetime import datetime
 from enum import Enum
+from uuid import UUID, uuid4
 
-
-from sqlalchemy import ForeignKey, Computed
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from pgvector.sqlalchemy import Vector
+from sqlalchemy import Computed, ForeignKey, Index
 from sqlalchemy.dialects.postgresql import UUID as PGUUID, JSONB, TSVECTOR
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql.functions import func
 from sqlalchemy.sql.sqltypes import String, BigInteger, Text, Integer, DateTime
-from pgvector.sqlalchemy import Vector
 from ssw.config import EMBEDDING_DIM
 from ssw.db.base import Base
-from uuid import UUID, uuid4
+
 
 class DocumentStatus(str, Enum):
     """文档生命周期状态。
@@ -27,31 +27,6 @@ class DocumentStatus(str, Enum):
     INDEXING = "indexing"
     READY = "ready"
     FAILED = "failed"
-
-class IngestionTaskType(str, Enum):
-    """入库任务类型。
-
-    ingest:  首次入库（解析 → 切分 → 全量 embedding → 写入）
-    reindex: 增量重建（按 chunk_hash 对齐，仅对变化 chunk 重新 embedding）
-    """
-
-    INGEST = "ingest"
-    REINDEX = "reindex"
-
-
-class IngestionTaskStatus(str, Enum):
-    """Celery 任务生命周期。
-
-    pending: 已入库表、还没被 worker 拉走
-    running: worker 已开始执行
-    success / failed: 终态
-    """
-
-    PENDING = "pending"
-    RUNNING = "running"
-    SUCCESS = "success"
-    FAILED = "failed"
-
 
 class Document(Base):
     __tablename__ = "documents"
@@ -92,6 +67,9 @@ class Document(Base):
 
 class DocumentChunk(Base):
     __tablename__ = "document_chunks"
+    __table_args__ = (
+        Index("ix_document_chunks_content_tsv", "content_tsv", postgresql_using="gin"),
+    )
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
     document_id: Mapped[UUID] = mapped_column(
@@ -105,7 +83,6 @@ class DocumentChunk(Base):
     embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIM), nullable=False)
 
     page_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    # section_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     # md5(content)，第 12 章增量索引依据
     chunk_hash: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
@@ -127,47 +104,3 @@ class DocumentChunk(Base):
     )
 
     document: Mapped[Document] = relationship(back_populates="chunks")
-
-class IngestionTask(Base):
-    """文档入库任务记录。
-
-    Celery 拉起 worker 前先在 DB 落一条 pending 行；worker 内根据生命周期更新
-    running → success/failed。前端轮询 documents 接口附带 `latest_task` 即可
-    展示进度（progress_total / progress_done）与失败原因。
-    """
-
-    __tablename__ = "ingestion_tasks"
-
-    id: Mapped[UUID] = mapped_column(
-        PGUUID(as_uuid=True), primary_key=True, default=uuid4
-    )
-    document_id: Mapped[UUID] = mapped_column(
-        PGUUID(as_uuid=True),
-        ForeignKey("documents.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    task_type: Mapped[IngestionTaskType] = mapped_column(String(16), nullable=False)
-    status: Mapped[IngestionTaskStatus] = mapped_column(
-        String(16), nullable=False, default=IngestionTaskStatus.PENDING
-    )
-    # Celery 当前 attempt 次数（Celery 内 retry 时 worker 写入），仅作展示用
-    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-    # 进度：reindex 时 total=新增 chunks 数，done=已 embedding 的批次累计
-    # ingest 走全量 embedding，total=切分后总 chunks 数
-    progress_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    progress_done: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-
-    started_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    finished_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-
-    document: Mapped[Document] = relationship(back_populates="ingestion_tasks")
